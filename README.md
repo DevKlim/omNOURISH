@@ -1,9 +1,9 @@
-# Nourish PT: Live Opportunity Mapper
+# omNOURISH: Live Opportunity Mapper
 
 ## Project Alignment & Overview
 This project provides a live-updating opportunity map designed to identify the best locations for food businesses in San Diego County. It addresses the goals established in the recent team meetings, emphasizing accurate 2022 NAICS codes standardization, demographic block-group profiling, UCSF foot traffic data integration, and community mapping. 
 
-The application utilizes an Agentic Chat interface (integrating with Google Agent ADK / A2A patterns) to help users dial in on specific market gaps (e.g., Healthy Grocery, Healthy Prepared Foods, Bodegas) in low-access neighborhoods.
+The application utilizes an Agentic Chat interface (integrating with Google Agent ADK / A2A patterns) to help users dial in on specific market gaps (Healthy Grocery, Healthy Prepared Foods, Bodegas) in low-access neighborhoods.
 
 ## Architecture & Mapping Stack
 - **Backend:** Go (Golang) handling API endpoints, PostgreSQL connections, and the Agent Chat service. Calculations are live-hashed and cached in-memory for instant retrieval.
