@@ -13,6 +13,11 @@ The application utilizes an Agentic Chat interface (integrating with Google Agen
   - *MapLibre Attempt:* WebGL creation failed in the testing environment (`FEATURE_FAILURE_WEBGL_EXHAUSTED_DRIVERS`).
   - *Current Approach:* **Leaflet (Canvas-Accelerated)** via `react-leaflet`. We reverted to Leaflet but injected the `preferCanvas={true}` configuration. This eliminates the DOM-bloat lag entirely by rendering all points on a single `<canvas>` element. We also completely rewrote the backend logic to generate points strictly along viable commercial parcels (bypassing unzoned areas like the ocean). To simulate a WebGL heatmap, we render layered, semi-transparent opportunity bubbles directly via the Leaflet Canvas API.
 
+## Setting up
+Open command prompt/terminal in the base folder (`omNOURISH/`) and run:
+`docker-compose up --build`
+- Proceed to connect to the interface via the stated url (likely `localhost:8082/`)
+
 ## Data Dictionary & Discoveries
 
 ### Local CSV File Index
