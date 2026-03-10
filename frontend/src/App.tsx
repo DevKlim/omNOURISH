@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { MapContainer, TileLayer, CircleMarker, useMapEvents, Popup } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -16,21 +16,41 @@ type MapData = {
   type: 'competitor' | 'opportunity';
 };
 
-type LocationEval = {
+type DetailedCosts = {
+  estimatedRent: number | null;
+  estimatedUtilities: number | null;
+  laborCostPct: number | null;
+  source: string;
+};
+
+type Demographics = {
+  incomeLevel: number | null;
+  gentrificationIndicator: number | null;
+  targetPopulationGrowth: number | null;
+  foodDesertStatus: boolean;
+  lowIncomeLowAccess: boolean;
+  foodInsecurityRate: number | null;
+  source: string;
+};
+
+type LocationEvalResponse = {
   lat: number;
   lng: number;
-  footTraffic: string;
-  nearbyCompetitors: number;
   opportunityScore: number;
+  footTraffic: number | null;
+  footTrafficSource: string;
+  isApproximated: boolean;
+  nearbyCompetitors: number;
+  supportiveBusinesses: number;
+  demographics: Demographics;
+  operatingCosts: DetailedCosts;
   demographicProfile: string;
-  estCosts: string;
   reviewCount: number;
   statsExtra: string;
   calcLog: string;
   citywideActiveTaxCompetitor: number;
 };
 
-// Component to track map movement and update bounds for backend query
 function MapEventHandler({ onBoundsChange, onLocationSelect }: { 
   onBoundsChange: (n: number, s: number, e: number, w: number) => void,
   onLocationSelect: (lat: number, lng: number) => void 
@@ -49,30 +69,54 @@ function MapEventHandler({ onBoundsChange, onLocationSelect }: {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'home' | 'map' | 'db_explorer'>('map');
-  const[activeWorkspace, setActiveWorkspace] = useState('General Food Business');
-  const [messages, setMessages] = useState<Message[]>([
+  const [activeWorkspace, setActiveWorkspace] = useState('General Food Business');
+  const[messages, setMessages] = useState<Message[]>([
     { id: 1, sender: 'agent', text: 'Hello. I am the Nourish PT Data Agent backed by the AI Gateway. How can I help you find gaps in the market today?' }
   ]);
-  const [inputValue, setInputValue] = useState('');
+  const[inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [activeLayers, setActiveLayers] = useState<string[]>(['base_map']);
   
-  const [naicsFilter, setNaicsFilter] = useState('445');
-  const[foodDesertFilter, setFoodDesertFilter] = useState('all');
-  const [rentFilter, setRentFilter] = useState('any');
-  const [popularityFilter, setPopularityFilter] = useState('high');
+  const[naicsFilter, setNaicsFilter] = useState('445');
   const[mapPoints, setMapPoints] = useState<MapData[]>([]);
-  const[debugInfo, setDebugInfo] = useState<any>(null);
+  const [debugInfo, setDebugInfo] = useState<any>(null);
 
-  // Manual Filter Toggles for Scoring Math
-  const[weightFootTraffic, setWeightFootTraffic] = useState(true);
-  const[weightCompetitors, setWeightCompetitors] = useState(true);
-  const [weightCosts, setWeightCosts] = useState(true);
+  // General Config
+  const [allowApproximations, setAllowApproximations] = useState(true);
+  const[computationMethod, setComputationMethod] = useState('standard');
+  const [liveCalculation, setLiveCalculation] = useState(true);
+  const[showLiveWarning, setShowLiveWarning] = useState(false);
+  const searchHistoryRef = useRef<number[]>([]);
+  
+  // Custom Scoring Profiles
+  const[scoringProfile, setScoringProfile] = useState('standard');
+  const[customWeights, setCustomWeights] = useState({
+    traffic: 1.0,
+    compPenalty: 8.0,
+    suppBonus: 1.5,
+    costPenalty: 5.0,
+    ratingBonus: 15.0
+  });
 
-  // Settings State for UI-based manual API Key overrides
+  const handleProfileChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const val = e.target.value;
+    setScoringProfile(val);
+    if (val === 'standard') {
+      setCustomWeights({ traffic: 1.0, compPenalty: 8.0, suppBonus: 1.5, costPenalty: 5.0, ratingBonus: 15.0 });
+    } else if (val === 'traffic_heavy') {
+      setCustomWeights({ traffic: 2.5, compPenalty: 5.0, suppBonus: 2.0, costPenalty: 3.0, ratingBonus: 10.0 });
+    } else if (val === 'cost_averse') {
+      setCustomWeights({ traffic: 1.0, compPenalty: 8.0, suppBonus: 1.5, costPenalty: 12.0, ratingBonus: 8.0 });
+    }
+  };
+
+  const handleWeightChange = (field: keyof typeof customWeights, value: string) => {
+    setCustomWeights(prev => ({...prev, [field]: parseFloat(value) || 0}));
+  };
+
   const [showAgentSettings, setShowAgentSettings] = useState(false);
-  const [llmProvider, setLlmProvider] = useState(localStorage.getItem('llm_provider') || 'NRP');
-  const [llmApiKey, setLlmApiKey] = useState(localStorage.getItem('llm_api_key') || '');
+  const[llmProvider, setLlmProvider] = useState(localStorage.getItem('llm_provider') || 'NRP');
+  const[llmApiKey, setLlmApiKey] = useState(localStorage.getItem('llm_api_key') || '');
   const[llmModel, setLlmModel] = useState(localStorage.getItem('llm_model') || 'gpt-oss');
   const [llmBaseUrl, setLlmBaseUrl] = useState(localStorage.getItem('llm_base_url') || '');
 
@@ -83,19 +127,18 @@ export default function App() {
     localStorage.setItem('llm_base_url', llmBaseUrl);
   },[llmProvider, llmApiKey, llmModel, llmBaseUrl]);
 
-  // Toggle state to flip between strict Points view and Gradient Heatmap view
-  const[heatmapMode, setHeatmapMode] = useState(true);
+  const [heatmapMode, setHeatmapMode] = useState(true);
 
-  const [mapBounds, setMapBounds] = useState<{n: number, s: number, e: number, w: number} | null>({
+  const[mapBounds, setMapBounds] = useState<{n: number, s: number, e: number, w: number} | null>({
     n: 32.95, s: 32.65, e: -116.95, w: -117.30
   });
   
-  const[selectedLocation, setSelectedLocation] = useState<{lat: number, lng: number} | null>(null);
-  const[locationEval, setLocationEval] = useState<LocationEval | null>(null);
-  const[isEvaluating, setIsEvaluating] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState<{lat: number, lng: number} | null>(null);
+  const [locationEval, setLocationEval] = useState<LocationEvalResponse | null>(null);
+  const [isEvaluating, setIsEvaluating] = useState(false);
 
-  const [exploreTable, setExploreTable] = useState('nourish_cbg_food_environment');
-  const [exploreResult, setExploreResult] = useState('');
+  const[exploreTable, setExploreTable] = useState('nourish_cbg_food_environment');
+  const[exploreResult, setExploreResult] = useState('');
 
   const quickTables =[
     "nourish_cbg_food_environment",
@@ -115,7 +158,7 @@ export default function App() {
     setLocationEval(null);
 
     try {
-      const response = await fetch(`http://localhost:8081/api/evaluate-location?lat=${lat}&lng=${lng}&naics=${naicsFilter}&useFootTraffic=${weightFootTraffic}&useCompetitors=${weightCompetitors}&useCosts=${weightCosts}`);
+      const response = await fetch(`http://localhost:8081/api/evaluate-location?lat=${lat}&lng=${lng}&naics=${naicsFilter}&allowApproximations=${allowApproximations}&computationMethod=${computationMethod}&trafficW=${customWeights.traffic}&compW=${customWeights.compPenalty}&suppW=${customWeights.suppBonus}&costW=${customWeights.costPenalty}&ratingW=${customWeights.ratingBonus}`);
       const data = await response.json();
       setLocationEval(data);
     } catch (error) {
@@ -160,9 +203,17 @@ export default function App() {
   };
 
   const handleManualSearch = async () => {
+    const now = Date.now();
+    searchHistoryRef.current = searchHistoryRef.current.filter(t => now - t < 10000); 
+    
+    if (searchHistoryRef.current.length >= 4 && liveCalculation) {
+      setShowLiveWarning(true);
+    }
+    searchHistoryRef.current.push(now);
+
     setIsLoading(true);
     try {
-      let url = `http://localhost:8081/api/opportunity-map?naics=${naicsFilter}&foodDesert=${foodDesertFilter}&rent=${rentFilter}&popularity=${popularityFilter}&useFootTraffic=${weightFootTraffic}&useCompetitors=${weightCompetitors}&useCosts=${weightCosts}`;
+      let url = `http://localhost:8081/api/opportunity-map?naics=${naicsFilter}&allowApproximations=${allowApproximations}&computationMethod=${computationMethod}&trafficW=${customWeights.traffic}&compW=${customWeights.compPenalty}&suppW=${customWeights.suppBonus}&costW=${customWeights.costPenalty}&ratingW=${customWeights.ratingBonus}`;
       if (mapBounds) {
         url += `&n=${mapBounds.n}&s=${mapBounds.s}&e=${mapBounds.e}&w=${mapBounds.w}`;
       }
@@ -172,8 +223,7 @@ export default function App() {
       setMapPoints(payload.data?.points ||[]);
       setDebugInfo(payload.data?.debug || null);
       setActiveLayers([
-        `NAICS Prefix: ${naicsFilter}`, 
-        `Food Desert Profile: ${foodDesertFilter}`
+        `NAICS Prefix: ${naicsFilter}`
       ]);
     } catch (error) {
       console.error("Manual search failed", error);
@@ -188,9 +238,16 @@ export default function App() {
 
   useEffect(() => {
     if (activeTab === 'map' && mapBounds) {
-      handleManualSearch();
+      if (!liveCalculation) return;
+
+      const delayDebounceFn = setTimeout(() => {
+        handleManualSearch();
+      }, 1000);
+
+      return () => clearTimeout(delayDebounceFn);
     }
-  },[naicsFilter, foodDesertFilter, rentFilter, popularityFilter, weightFootTraffic, weightCompetitors, weightCosts, mapBounds, activeTab]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[naicsFilter, allowApproximations, computationMethod, customWeights, mapBounds, activeTab, liveCalculation]);
 
   const handleExploreDB = async () => {
     setExploreResult('Querying database...');
@@ -251,6 +308,12 @@ export default function App() {
           <div className={`sidebar-item ${activeTab === 'home' ? 'active' : ''}`} onClick={() => setActiveTab('home')}>Methodology & Home</div>
           <div className={`sidebar-item ${activeTab === 'map' ? 'active' : ''}`} onClick={() => setActiveTab('map')}>Opportunity Map</div>
           <div className={`sidebar-item ${activeTab === 'db_explorer' ? 'active' : ''}`} onClick={() => setActiveTab('db_explorer')}>Database Explorer</div>
+          
+          <div className="sidebar-header" style={{marginTop: '16px'}}>Integration API Docs</div>
+          <div className="sidebar-item" onClick={() => window.open('http://localhost:8081/swagger', '_blank')} style={{color: '#0b57d0'}}>
+            Swagger / OpenAPI ↗
+          </div>
+
           <div className="sidebar-header" style={{marginTop: '16px'}}>Active Data Sources</div>
           <div className="sidebar-item">ca_business (SD Tax + GM)</div>
           <div className="sidebar-item">nourish_cbg_pedestrian_flow</div>
@@ -276,7 +339,7 @@ export default function App() {
                   
                   <h3>The Opportunity Scoring Methodology</h3>
                   <div className="equation-box">
-                    Opportunity Score = Base (45) + Foot Traffic Impact - Cost Penalties - Competition Penalties + Market Gap Bonus
+                    Opportunity Score = Base (45) + Foot Traffic Impact + Supportive Biz Bonus - Cost Penalties - Competition Penalties + Market Gap Bonus
                   </div>
 
                   <h3>Data Sources Being Queried</h3>
@@ -293,31 +356,77 @@ export default function App() {
             {activeTab === 'map' && (
               <>
                 <div className="manual-panel">
-                  <h2 className="panel-title">Scoring Algorithm Weighting</h2>
-                  
+                  <h2 className="panel-title">Scoring Function Selection</h2>
+
                   <div className="control-group">
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={weightFootTraffic} onChange={e => setWeightFootTraffic(e.target.checked)} />
-                      Consider Foot Traffic / Popularity
-                    </label>
+                    <label>Active Scoring Profile</label>
+                    <select className="control-select" value={scoringProfile} onChange={handleProfileChange}>
+                      <option value="standard">Standard Balanced Approach</option>
+                      <option value="traffic_heavy">Prioritize Foot Traffic (Pedestrian Heavy)</option>
+                      <option value="cost_averse">Cost Averse (Penalty for High Rent)</option>
+                      <option value="custom">⚙️ Custom Math Profile</option>
+                    </select>
                   </div>
-                  <div className="control-group">
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={weightCompetitors} onChange={e => setWeightCompetitors(e.target.checked)} />
-                      Consider Competitor Density (Penalize)
-                    </label>
-                  </div>
-                  <div className="control-group">
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={weightCosts} onChange={e => setWeightCosts(e.target.checked)} />
-                      Consider Area Land / Operating Costs
-                    </label>
-                  </div>
+
+                  {scoringProfile === 'custom' && (
+                    <div style={{ backgroundColor: '#f0f4f9', padding: '12px', borderRadius: '8px', marginBottom: '16px', border: '1px solid #d3e3fd' }}>
+                      <div className="control-group" style={{ marginBottom: '8px' }}>
+                        <label style={{ fontSize: '12px' }}>Traffic Positivity Weight</label>
+                        <input type="number" step="0.5" className="control-input" value={customWeights.traffic} onChange={e => handleWeightChange('traffic', e.target.value)} />
+                      </div>
+                      <div className="control-group" style={{ marginBottom: '8px' }}>
+                        <label style={{ fontSize: '12px' }}>Competitor Penalty Multiplier</label>
+                        <input type="number" step="0.5" className="control-input" value={customWeights.compPenalty} onChange={e => handleWeightChange('compPenalty', e.target.value)} />
+                      </div>
+                      <div className="control-group" style={{ marginBottom: '8px' }}>
+                        <label style={{ fontSize: '12px' }}>Supportive Biz Bonus Mutliplier</label>
+                        <input type="number" step="0.5" className="control-input" value={customWeights.suppBonus} onChange={e => handleWeightChange('suppBonus', e.target.value)} />
+                      </div>
+                      <div className="control-group" style={{ marginBottom: '8px' }}>
+                        <label style={{ fontSize: '12px' }}>Cost/Rent Penalty Multiplier</label>
+                        <input type="number" step="0.5" className="control-input" value={customWeights.costPenalty} onChange={e => handleWeightChange('costPenalty', e.target.value)} />
+                      </div>
+                    </div>
+                  )}
 
                   <hr style={{margin: '16px 0', borderColor: '#e0e0e0'}} />
 
                   <h2 className="panel-title">Data Filter Configuration</h2>
+
+                  <div className="control-group">
+                    <label>Computation Method / Search Area Strategy</label>
+                    <select className="control-select" value={computationMethod} onChange={e => setComputationMethod(e.target.value)}>
+                      <option value="standard">Standard Local Allocation (Dense Focus)</option>
+                      <option value="boutique">Boutique & Additive (Larger Trade Area)</option>
+                    </select>
+                  </div>
                   
+                  <div className="control-group" style={{ backgroundColor: showLiveWarning ? '#fce8e6' : 'transparent', padding: showLiveWarning ? '8px' : '0', borderRadius: '8px', transition: 'all 0.3s' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: showLiveWarning ? '#b2182b' : 'inherit' }}>
+                      <input 
+                        type="checkbox" 
+                        checked={liveCalculation} 
+                        onChange={e => {
+                          setLiveCalculation(e.target.checked);
+                          if(e.target.checked === false) setShowLiveWarning(false);
+                        }} 
+                      />
+                      Enable Live Dynamic Calculations
+                    </label>
+                    {showLiveWarning && (
+                      <div style={{ fontSize: '12px', color: '#b2182b', marginTop: '6px' }}>
+                        ⚠️ Rapid calculations detected. Consider turning this off to limit heavy data processing while adjusting map bounds.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="control-group">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={allowApproximations} onChange={e => setAllowApproximations(e.target.checked)} />
+                      Allow Proxy Estimation / Fallback Math (Enable for Counterfactuals)
+                    </label>
+                  </div>
+
                   <div className="control-group">
                     <label>View Mode</label>
                     <div style={{ display: 'flex', gap: '8px' }}>
@@ -341,36 +450,9 @@ export default function App() {
                   <div className="control-group">
                     <label>Business Vertical (NAICS Base)</label>
                     <select className="control-select" value={naicsFilter} onChange={e => setNaicsFilter(e.target.value)}>
-                      <option value="445">Food and Beverage Stores (445)</option>
-                      <option value="722">Food Services and Drinking (722)</option>
-                      <option value="454">Nonstore Retailers / Food Trucks (454)</option>
-                    </select>
-                  </div>
-
-                  <div className="control-group">
-                    <label>Food Access / Desert Focus</label>
-                    <select className="control-select" value={foodDesertFilter} onChange={e => setFoodDesertFilter(e.target.value)}>
-                      <option value="usda_official">USDA Official Food Deserts</option>
-                      <option value="low_income">Low Income / Low Access</option>
-                      <option value="all">All Areas</option>
-                    </select>
-                  </div>
-
-                  <div className="control-group">
-                    <label>Cost of Land / Rent Target</label>
-                    <select className="control-select" value={rentFilter} onChange={e => setRentFilter(e.target.value)}>
-                      <option value="under_30">Under $30 / sqft (Affordable)</option>
-                      <option value="under_50">Under $50 / sqft</option>
-                      <option value="any">Any Price</option>
-                    </select>
-                  </div>
-
-                  <div className="control-group">
-                    <label>Pedestrian Popularity Target</label>
-                    <select className="control-select" value={popularityFilter} onChange={e => setPopularityFilter(e.target.value)}>
-                      <option value="high">High Pedestrian Flow Only</option>
-                      <option value="medium">Medium Flow +</option>
-                      <option value="any">Any Popularity Level</option>
+                      <option value="445">Food and Beverage Stores (445) - Needs farms, avoids other supers</option>
+                      <option value="722">Food Services and Drinking (722) - Needs dense office/bars, avoids same cuisine</option>
+                      <option value="454">Nonstore Retailers / Food Trucks (454) - Needs breweries/parks</option>
                     </select>
                   </div>
 
@@ -389,8 +471,22 @@ export default function App() {
                   )}
                 </div>
 
-                <div className="map-container">
-                  <div className="map-overlay">
+                <div className="map-container" style={{ position: 'relative' }}>
+                  {!liveCalculation && (
+                    <button 
+                      onClick={handleManualSearch}
+                      style={{
+                        position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
+                        zIndex: 2000, padding: '10px 24px', backgroundColor: '#0b57d0', color: 'white',
+                        borderRadius: '24px', border: 'none', fontWeight: 500, cursor: 'pointer',
+                        boxShadow: '0 2px 6px rgba(0,0,0,0.3)'
+                      }}
+                    >
+                      🔄 Run Calculation For Current Area
+                    </button>
+                  )}
+
+                  <div className="map-overlay" style={{ top: !liveCalculation ? '64px' : '16px' }}>
                     <strong>Highest Score Highlighted: {maxScore > 0 ? maxScore : '...'}</strong>
                     {activeLayers.map((layer, i) => <div key={i} style={{color: '#0b57d0', fontSize: '13px', marginTop: '4px'}}>{layer}</div>)}
                     <div style={{marginTop: '8px', color: '#444746'}}>
@@ -400,42 +496,72 @@ export default function App() {
                   </div>
 
                   {selectedLocation && (
-                    <div className="evaluation-panel">
-                      <h3>📍 Location Evaluation</h3>
+                    <div className="evaluation-panel" style={{ width: '380px', maxHeight: '90%', overflowY: 'auto' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                        <h3 style={{ margin: 0 }}>📍 Enterprise Location Eval</h3>
+                        <button onClick={() => setSelectedLocation(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '18px' }}>✖</button>
+                      </div>
+                      
                       {isEvaluating ? (
                         <p style={{fontSize: '14px', color: '#444746'}}>Running database queries on coordinates...</p>
                       ) : locationEval ? (
                         <>
                           <div className="eval-metric">
                             <span>Area Foot Traffic:</span>
-                            <span>{locationEval.footTraffic}</span>
+                            <span>{locationEval.footTraffic ?? 'Strict NULL'} {locationEval.isApproximated ? '(Proxy)' : ''}</span>
                           </div>
                           <div className="eval-metric">
-                            <span>GM Competitors (~2mi):</span>
-                            <span>{locationEval.nearbyCompetitors}</span>
+                            <span>Direct Competitors:</span>
+                            <span style={{ color: '#b2182b', fontWeight: 'bold' }}>{locationEval.nearbyCompetitors}</span>
                           </div>
                           <div className="eval-metric">
-                            <span>Neighborhood Context:</span>
-                            <span>{locationEval.demographicProfile}</span>
-                          </div>
-                          <div className="eval-metric">
-                            <span>Est. Operational Costs:</span>
-                            <span>{locationEval.estCosts}</span>
-                          </div>
-                          <div className="eval-metric">
-                            <span>Area Context Proxy:</span>
-                            <span style={{textAlign: 'right'}}>{locationEval.statsExtra}</span>
+                            <span>Supportive / Related Biz:</span>
+                            <span style={{ color: '#0f9d58', fontWeight: 'bold' }}>{locationEval.supportiveBusinesses}</span>
                           </div>
                           
-                          <div style={{ marginTop: '12px', padding: '8px', backgroundColor: '#f0f4f9', borderRadius: '8px', fontSize: '12px', fontFamily: 'monospace', color: '#041e49' }}>
+                          <h4 style={{ margin: '12px 0 8px 0', fontSize: '13px', color: '#444746' }}>Demographics & Indicators</h4>
+                          <div className="eval-metric" style={{ fontSize: '13px' }}>
+                            <span>Income Level (Est):</span>
+                            <span>{locationEval.demographics.incomeLevel ? `$${locationEval.demographics.incomeLevel.toLocaleString()}` : 'N/A'}</span>
+                          </div>
+                          <div className="eval-metric" style={{ fontSize: '13px' }}>
+                            <span>Gentrification Index:</span>
+                            <span style={{ color: locationEval.demographics.gentrificationIndicator && locationEval.demographics.gentrificationIndicator > 0 ? '#0f9d58' : 'inherit' }}>
+                              {locationEval.demographics.gentrificationIndicator ? `+${locationEval.demographics.gentrificationIndicator.toFixed(1)}%` : 'N/A'}
+                            </span>
+                          </div>
+                          <div className="eval-metric" style={{ fontSize: '13px' }}>
+                            <span>Population Growth:</span>
+                            <span>{locationEval.demographics.targetPopulationGrowth ? `+${locationEval.demographics.targetPopulationGrowth.toFixed(1)}%` : 'N/A'}</span>
+                          </div>
+                          <div className="eval-metric" style={{ fontSize: '13px' }}>
+                            <span>USDA Food Desert:</span>
+                            <span>{locationEval.demographics.foodDesertStatus ? 'Yes (Bonus applied)' : 'No'}</span>
+                          </div>
+
+                          <h4 style={{ margin: '12px 0 8px 0', fontSize: '13px', color: '#444746' }}>Operating Cost Estimates (SBA Guidelines)</h4>
+                          <div className="eval-metric" style={{ fontSize: '13px' }}>
+                            <span>Rent Baseline (~sqft/yr):</span>
+                            <span>{locationEval.operatingCosts.estimatedRent ? `$${locationEval.operatingCosts.estimatedRent}` : 'Unknown'}</span>
+                          </div>
+                          <div className="eval-metric" style={{ fontSize: '13px' }}>
+                            <span>Est. Utilities (/mo):</span>
+                            <span>{locationEval.operatingCosts.estimatedUtilities ? `$${locationEval.operatingCosts.estimatedUtilities.toFixed(0)}` : 'Unknown'}</span>
+                          </div>
+                          <div className="eval-metric" style={{ fontSize: '13px' }}>
+                            <span>Est. Labor Load (% Rev):</span>
+                            <span>{locationEval.operatingCosts.laborCostPct ? `${locationEval.operatingCosts.laborCostPct}%` : 'Unknown'}</span>
+                          </div>
+                          
+                          <div style={{ marginTop: '16px', padding: '8px', backgroundColor: '#f0f4f9', borderRadius: '8px', fontSize: '11px', fontFamily: 'monospace', color: '#041e49', wordBreak: 'break-all' }}>
                             <strong>Calc Trace:</strong><br/>
                             {locationEval.calcLog}
                           </div>
 
-                          <div className="eval-metric" style={{marginTop: '16px', border: 'none', fontSize: '16px'}}>
+                          <div className="eval-metric" style={{marginTop: '16px', border: 'none', fontSize: '18px'}}>
                             <span><strong>Opp. Score (0-100):</strong></span>
                             <span style={{color: locationEval.opportunityScore > 70 ? '#0f9d58' : locationEval.opportunityScore < 30 ? '#444746' : '#db4437'}}>
-                              {locationEval.opportunityScore}
+                              {locationEval.opportunityScore.toFixed(1)}
                             </span>
                           </div>
                         </>
