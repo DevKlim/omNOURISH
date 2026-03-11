@@ -68,55 +68,71 @@ function MapEventHandler({ onBoundsChange, onLocationSelect }: {
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'home' | 'map' | 'db_explorer'>('map');
+  const [activeTab, setActiveTab] = useState<'home' | 'map' | 'recommend' | 'db_explorer'>('map');
   const [activeWorkspace, setActiveWorkspace] = useState('General Food Business');
-  const[messages, setMessages] = useState<Message[]>([
+  const [messages, setMessages] = useState<Message[]>([
     { id: 1, sender: 'agent', text: 'Hello. I am the Nourish PT Data Agent backed by the AI Gateway. How can I help you find gaps in the market today?' }
   ]);
-  const[inputValue, setInputValue] = useState('');
+  const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [activeLayers, setActiveLayers] = useState<string[]>(['base_map']);
+  const[activeLayers, setActiveLayers] = useState<string[]>(['base_map']);
   
   const[naicsFilter, setNaicsFilter] = useState('445');
-  const[mapPoints, setMapPoints] = useState<MapData[]>([]);
+  const [mapPoints, setMapPoints] = useState<MapData[]>([]);
   const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [businessProfiles, setBusinessProfiles] = useState<any[]>([]);
 
   // General Config
   const [allowApproximations, setAllowApproximations] = useState(true);
   const[computationMethod, setComputationMethod] = useState('standard');
   const [liveCalculation, setLiveCalculation] = useState(true);
-  const[showLiveWarning, setShowLiveWarning] = useState(false);
+  const [showLiveWarning, setShowLiveWarning] = useState(false);
   const searchHistoryRef = useRef<number[]>([]);
   
   // Custom Scoring Profiles
   const[scoringProfile, setScoringProfile] = useState('standard');
-  const[customWeights, setCustomWeights] = useState({
+  const [customWeights, setCustomWeights] = useState({
     traffic: 1.0,
     compPenalty: 8.0,
     suppBonus: 1.5,
     costPenalty: 5.0,
-    ratingBonus: 15.0
+    ratingBonus: 15.0,
+    foodDesertBonus: 0.0,
+    gentrificationWeight: 0.0
   });
+
+  useEffect(() => {
+    fetch('http://localhost:8081/api/business-profiles')
+      .then(res => res.json())
+      .then(data => setBusinessProfiles(data))
+      .catch(err => console.error(err));
+  },[]);
+
+  useEffect(() => {
+     setSelectedLocation(null);
+  }, [activeTab]);
 
   const handleProfileChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
     setScoringProfile(val);
     if (val === 'standard') {
-      setCustomWeights({ traffic: 1.0, compPenalty: 8.0, suppBonus: 1.5, costPenalty: 5.0, ratingBonus: 15.0 });
+      setCustomWeights({ traffic: 1.0, compPenalty: 8.0, suppBonus: 1.5, costPenalty: 5.0, ratingBonus: 15.0, foodDesertBonus: 0.0, gentrificationWeight: 0.0 });
     } else if (val === 'traffic_heavy') {
-      setCustomWeights({ traffic: 2.5, compPenalty: 5.0, suppBonus: 2.0, costPenalty: 3.0, ratingBonus: 10.0 });
+      setCustomWeights({ traffic: 2.5, compPenalty: 5.0, suppBonus: 2.0, costPenalty: 3.0, ratingBonus: 10.0, foodDesertBonus: 0.0, gentrificationWeight: 0.0 });
     } else if (val === 'cost_averse') {
-      setCustomWeights({ traffic: 1.0, compPenalty: 8.0, suppBonus: 1.5, costPenalty: 12.0, ratingBonus: 8.0 });
+      setCustomWeights({ traffic: 1.0, compPenalty: 8.0, suppBonus: 1.5, costPenalty: 12.0, ratingBonus: 8.0, foodDesertBonus: 0.0, gentrificationWeight: 0.0 });
+    } else if (val === 'offset_food_deserts') {
+      setCustomWeights({ traffic: 1.5, compPenalty: 12.0, suppBonus: 2.5, costPenalty: 7.0, ratingBonus: 5.0, foodDesertBonus: 30.0, gentrificationWeight: -5.0 });
     }
   };
 
   const handleWeightChange = (field: keyof typeof customWeights, value: string) => {
-    setCustomWeights(prev => ({...prev, [field]: parseFloat(value) || 0}));
+    setCustomWeights(prev => ({...prev,[field]: parseFloat(value) || 0}));
   };
 
   const [showAgentSettings, setShowAgentSettings] = useState(false);
-  const[llmProvider, setLlmProvider] = useState(localStorage.getItem('llm_provider') || 'NRP');
-  const[llmApiKey, setLlmApiKey] = useState(localStorage.getItem('llm_api_key') || '');
+  const [llmProvider, setLlmProvider] = useState(localStorage.getItem('llm_provider') || 'NRP');
+  const [llmApiKey, setLlmApiKey] = useState(localStorage.getItem('llm_api_key') || '');
   const[llmModel, setLlmModel] = useState(localStorage.getItem('llm_model') || 'gpt-oss');
   const [llmBaseUrl, setLlmBaseUrl] = useState(localStorage.getItem('llm_base_url') || '');
 
@@ -137,8 +153,11 @@ export default function App() {
   const [locationEval, setLocationEval] = useState<LocationEvalResponse | null>(null);
   const [isEvaluating, setIsEvaluating] = useState(false);
 
-  const[exploreTable, setExploreTable] = useState('nourish_cbg_food_environment');
-  const[exploreResult, setExploreResult] = useState('');
+  const[recommendations, setRecommendations] = useState<any[]>([]);
+  const [isRecommending, setIsRecommending] = useState(false);
+
+  const [exploreTable, setExploreTable] = useState('nourish_cbg_food_environment');
+  const [exploreResult, setExploreResult] = useState('');
 
   const quickTables =[
     "nourish_cbg_food_environment",
@@ -154,17 +173,32 @@ export default function App() {
 
   const handleLocationSelect = async (lat: number, lng: number) => {
     setSelectedLocation({ lat, lng });
-    setIsEvaluating(true);
-    setLocationEval(null);
 
-    try {
-      const response = await fetch(`http://localhost:8081/api/evaluate-location?lat=${lat}&lng=${lng}&naics=${naicsFilter}&allowApproximations=${allowApproximations}&computationMethod=${computationMethod}&trafficW=${customWeights.traffic}&compW=${customWeights.compPenalty}&suppW=${customWeights.suppBonus}&costW=${customWeights.costPenalty}&ratingW=${customWeights.ratingBonus}`);
-      const data = await response.json();
-      setLocationEval(data);
-    } catch (error) {
-      console.error("Evaluation failed", error);
-    } finally {
-      setIsEvaluating(false);
+    if (activeTab === 'recommend') {
+      setIsRecommending(true);
+      setRecommendations([]);
+      try {
+        const response = await fetch(`http://localhost:8081/api/recommend-business?lat=${lat}&lng=${lng}`);
+        const data = await response.json();
+        setRecommendations(data ||[]);
+      } catch (error) {
+        console.error("Recommendation failed", error);
+      } finally {
+        setIsRecommending(false);
+      }
+    } else {
+      setIsEvaluating(true);
+      setLocationEval(null);
+
+      try {
+        const response = await fetch(`http://localhost:8081/api/evaluate-location?lat=${lat}&lng=${lng}&naics=${naicsFilter}&allowApproximations=${allowApproximations}&computationMethod=${computationMethod}&trafficW=${customWeights.traffic}&compW=${customWeights.compPenalty}&suppW=${customWeights.suppBonus}&costW=${customWeights.costPenalty}&ratingW=${customWeights.ratingBonus}&foodDesertW=${customWeights.foodDesertBonus}&gentrificationW=${customWeights.gentrificationWeight}`);
+        const data = await response.json();
+        setLocationEval(data);
+      } catch (error) {
+        console.error("Evaluation failed", error);
+      } finally {
+        setIsEvaluating(false);
+      }
     }
   };
 
@@ -213,7 +247,7 @@ export default function App() {
 
     setIsLoading(true);
     try {
-      let url = `http://localhost:8081/api/opportunity-map?naics=${naicsFilter}&allowApproximations=${allowApproximations}&computationMethod=${computationMethod}&trafficW=${customWeights.traffic}&compW=${customWeights.compPenalty}&suppW=${customWeights.suppBonus}&costW=${customWeights.costPenalty}&ratingW=${customWeights.ratingBonus}`;
+      let url = `http://localhost:8081/api/opportunity-map?naics=${naicsFilter}&allowApproximations=${allowApproximations}&computationMethod=${computationMethod}&trafficW=${customWeights.traffic}&compW=${customWeights.compPenalty}&suppW=${customWeights.suppBonus}&costW=${customWeights.costPenalty}&ratingW=${customWeights.ratingBonus}&foodDesertW=${customWeights.foodDesertBonus}&gentrificationW=${customWeights.gentrificationWeight}`;
       if (mapBounds) {
         url += `&n=${mapBounds.n}&s=${mapBounds.s}&e=${mapBounds.e}&w=${mapBounds.w}`;
       }
@@ -306,7 +340,8 @@ export default function App() {
         <aside className="sidebar">
           <div className="sidebar-header">Application Views</div>
           <div className={`sidebar-item ${activeTab === 'home' ? 'active' : ''}`} onClick={() => setActiveTab('home')}>Methodology & Home</div>
-          <div className={`sidebar-item ${activeTab === 'map' ? 'active' : ''}`} onClick={() => setActiveTab('map')}>Opportunity Map</div>
+          <div className={`sidebar-item ${activeTab === 'map' ? 'active' : ''}`} onClick={() => setActiveTab('map')}>Opportunity Map (By Business)</div>
+          <div className={`sidebar-item ${activeTab === 'recommend' ? 'active' : ''}`} onClick={() => setActiveTab('recommend')}>Location Recommender</div>
           <div className={`sidebar-item ${activeTab === 'db_explorer' ? 'active' : ''}`} onClick={() => setActiveTab('db_explorer')}>Database Explorer</div>
           
           <div className="sidebar-header" style={{marginTop: '16px'}}>Integration API Docs</div>
@@ -326,6 +361,7 @@ export default function App() {
             <h1 className="workspace-title">
               {activeTab === 'home' && 'Methodology & Application Guide'}
               {activeTab === 'map' && `Opportunity Map | Active Context: ${activeWorkspace}`}
+              {activeTab === 'recommend' && 'Location Recommender System'}
               {activeTab === 'db_explorer' && 'Database Schema Explorer'}
             </h1>
           </div>
@@ -335,11 +371,17 @@ export default function App() {
               <div className="home-container">
                 <div className="home-card">
                   <h2>Welcome to the Nourish PT Platform</h2>
-                  <p>This application helps identify the optimal streets and block groups in San Diego County to establish new food businesses. It queries live data directly from the PostgreSQL data warehouse to find market gaps.</p>
+                  <p>This application helps identify the optimal streets and block groups in San Diego County to establish new food businesses. It queries live data directly from the PostgreSQL data warehouse to find market gaps, using a multi-dimensional computation methodology that accommodates variables such as food deserts, rental costs, and competitive penalty bounds.</p>
                   
+                  <h3>Two Core Functions</h3>
+                  <ul>
+                    <li><strong>Start from Business Type:</strong> Select a business structure (e.g. Healthy Grocery) and our engine highlights the optimal parcels.</li>
+                    <li><strong>Start from Location:</strong> Click anywhere on our map and the system recommends the most mathematically viable NAICS entity to open.</li>
+                  </ul>
+
                   <h3>The Opportunity Scoring Methodology</h3>
                   <div className="equation-box">
-                    Opportunity Score = Base (45) + Foot Traffic Impact + Supportive Biz Bonus - Cost Penalties - Competition Penalties + Market Gap Bonus
+                    Opportunity Score = Base (45) + Foot Traffic Impact + Supportive Biz Bonus - Cost Penalties - Competition Penalties + Market Gap Bonus + Food Desert Offset
                   </div>
 
                   <h3>Data Sources Being Queried</h3>
@@ -359,11 +401,43 @@ export default function App() {
                   <h2 className="panel-title">Scoring Function Selection</h2>
 
                   <div className="control-group">
-                    <label>Active Scoring Profile</label>
+                    <label>Business Vertical / Goal Profile</label>
+                    <select className="control-select" value={naicsFilter} onChange={e => {
+                        const profile = businessProfiles.find(p => p.naics === e.target.value);
+                        setNaicsFilter(e.target.value);
+                        if(profile) {
+                            setCustomWeights({
+                                traffic: profile.trafficWeight,
+                                compPenalty: profile.compPenaltyWeight,
+                                suppBonus: profile.suppBonusWeight,
+                                costPenalty: profile.costPenaltyWeight,
+                                ratingBonus: profile.ratingBonusWeight,
+                                foodDesertBonus: profile.foodDesertBonus,
+                                gentrificationWeight: profile.gentrificationWeight
+                            });
+                            setScoringProfile('custom');
+                        }
+                    }}>
+                      {businessProfiles.map(p => (
+                          <option key={p.naics} value={p.naics}>{p.name} ({p.naics})</option>
+                      ))}
+                      {businessProfiles.length === 0 && (
+                          <>
+                            <option value="445">Food and Beverage Stores (445)</option>
+                            <option value="722">Food Services and Drinking (722)</option>
+                            <option value="454">Nonstore Retailers / Food Trucks (454)</option>
+                          </>
+                      )}
+                    </select>
+                  </div>
+
+                  <div className="control-group">
+                    <label>Active Scoring Filter Mode</label>
                     <select className="control-select" value={scoringProfile} onChange={handleProfileChange}>
                       <option value="standard">Standard Balanced Approach</option>
                       <option value="traffic_heavy">Prioritize Foot Traffic (Pedestrian Heavy)</option>
                       <option value="cost_averse">Cost Averse (Penalty for High Rent)</option>
+                      <option value="offset_food_deserts">Community First (Offset Food Deserts)</option>
                       <option value="custom">⚙️ Custom Math Profile</option>
                     </select>
                   </div>
@@ -385,6 +459,14 @@ export default function App() {
                       <div className="control-group" style={{ marginBottom: '8px' }}>
                         <label style={{ fontSize: '12px' }}>Cost/Rent Penalty Multiplier</label>
                         <input type="number" step="0.5" className="control-input" value={customWeights.costPenalty} onChange={e => handleWeightChange('costPenalty', e.target.value)} />
+                      </div>
+                      <div className="control-group" style={{ marginBottom: '8px' }}>
+                        <label style={{ fontSize: '12px' }}>Food Desert Offset Bonus</label>
+                        <input type="number" step="0.5" className="control-input" value={customWeights.foodDesertBonus} onChange={e => handleWeightChange('foodDesertBonus', e.target.value)} />
+                      </div>
+                      <div className="control-group" style={{ marginBottom: '8px' }}>
+                        <label style={{ fontSize: '12px' }}>Gentrification Weight (Income Proxy)</label>
+                        <input type="number" step="0.5" className="control-input" value={customWeights.gentrificationWeight} onChange={e => handleWeightChange('gentrificationWeight', e.target.value)} />
                       </div>
                     </div>
                   )}
@@ -445,15 +527,6 @@ export default function App() {
                         Strict Points
                       </button>
                     </div>
-                  </div>
-
-                  <div className="control-group">
-                    <label>Business Vertical (NAICS Base)</label>
-                    <select className="control-select" value={naicsFilter} onChange={e => setNaicsFilter(e.target.value)}>
-                      <option value="445">Food and Beverage Stores (445) - Needs farms, avoids other supers</option>
-                      <option value="722">Food Services and Drinking (722) - Needs dense office/bars, avoids same cuisine</option>
-                      <option value="454">Nonstore Retailers / Food Trucks (454) - Needs breweries/parks</option>
-                    </select>
                   </div>
 
                   <hr style={{margin: '24px 0', borderColor: '#e0e0e0'}} />
@@ -536,7 +609,7 @@ export default function App() {
                           </div>
                           <div className="eval-metric" style={{ fontSize: '13px' }}>
                             <span>USDA Food Desert:</span>
-                            <span>{locationEval.demographics.foodDesertStatus ? 'Yes (Bonus applied)' : 'No'}</span>
+                            <span>{locationEval.demographics.foodDesertStatus ? 'Yes (System Aware)' : 'No'}</span>
                           </div>
 
                           <h4 style={{ margin: '12px 0 8px 0', fontSize: '13px', color: '#444746' }}>Operating Cost Estimates (SBA Guidelines)</h4>
@@ -723,6 +796,69 @@ export default function App() {
               </>
             )}
 
+            {activeTab === 'recommend' && (
+              <>
+                <div className="manual-panel">
+                  <h2 className="panel-title">Location Recommender</h2>
+                  <p style={{ fontSize: '14px', color: '#444746', marginBottom: '16px', lineHeight: '1.6' }}>
+                    Click anywhere on the map to evaluate a specific point or neighborhood against our computational framework.
+                    It will automatically process all available business configurations (NAICS structures) and recommend the best fit based on market gaps, local competition, demographic bonuses, and land costs.
+                  </p>
+                  
+                  {selectedLocation && (
+                    <div style={{ backgroundColor: '#f0f4f9', padding: '16px', borderRadius: '8px', border: '1px solid #d3e3fd' }}>
+                      <h3 style={{ fontSize: '14px', marginBottom: '12px', color: '#041e49' }}>📍 Selected Coordinates</h3>
+                      <div style={{ fontSize: '13px', fontFamily: 'monospace', marginBottom: '16px' }}>
+                        Lat: {selectedLocation.lat.toFixed(5)}<br/>
+                        Lng: {selectedLocation.lng.toFixed(5)}
+                      </div>
+
+                      {isRecommending ? (
+                        <div style={{ fontSize: '13px', color: '#747775' }}>Computing cross-profile evaluations...</div>
+                      ) : recommendations.length > 0 ? (
+                        <div>
+                          <h4 style={{ fontSize: '13px', marginBottom: '8px', color: '#1f1f1f' }}>Top Recommended Models:</h4>
+                          {recommendations.map((rec, i) => (
+                            <div key={i} style={{ backgroundColor: 'white', padding: '12px', borderRadius: '6px', marginBottom: '8px', borderLeft: `4px solid ${i === 0 ? '#0f9d58' : '#0b57d0'}`, boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                                <strong style={{ fontSize: '13px' }}>{rec.profile.name}</strong>
+                                <span style={{ fontWeight: 'bold', color: rec.score > 70 ? '#0f9d58' : '#1f1f1f' }}>{rec.score.toFixed(1)}</span>
+                              </div>
+                              <div style={{ fontSize: '11px', color: '#747775' }}>NAICS Framework: {rec.profile.naics}</div>
+                              <div style={{ fontSize: '11px', color: '#444746', marginTop: '6px', lineHeight: '1.4' }}>{rec.details}</div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div style={{ fontSize: '13px', color: '#747775' }}>No recommendations generated for this point.</div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <div className="map-container" style={{ position: 'relative' }}>
+                  <MapContainer 
+                    center={[32.847, -117.273]} 
+                    zoom={12} 
+                    style={{ height: '100%', width: '100%', minHeight: '600px' }}
+                    preferCanvas={true}
+                  >
+                    <TileLayer
+                      url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                      attribution='&copy; OpenStreetMap &copy; CARTO'
+                    />
+                    <MapEventHandler onBoundsChange={handleMapChange} onLocationSelect={handleLocationSelect} />
+                    {selectedLocation && (
+                      <CircleMarker 
+                        center={[selectedLocation.lat, selectedLocation.lng]} 
+                        radius={8} 
+                        pathOptions={{ color: '#000000', weight: 2, fillColor: '#ffffff', fillOpacity: 1 }}
+                      />
+                    )}
+                  </MapContainer>
+                </div>
+              </>
+            )}
+
             {activeTab === 'db_explorer' && (
               <div style={{ padding: '32px', width: '100%', display: 'flex', flexDirection: 'column', gap: '20px' }}>
                 <div style={{ backgroundColor: '#e8f0fe', padding: '20px', borderRadius: '12px', color: '#041e49', border: '1px solid #d3e3fd' }}>
@@ -781,3 +917,4 @@ export default function App() {
     </>
   );
 }
+

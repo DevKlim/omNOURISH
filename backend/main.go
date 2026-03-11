@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -95,6 +96,26 @@ type GeminiResponse struct {
 	} `json:"candidates"`
 }
 
+type BusinessConfig struct {
+	NAICS                string  `json:"naics"`
+	Name                 string  `json:"name"`
+	TrafficWeight        float64 `json:"trafficWeight"`
+	CompPenaltyWeight    float64 `json:"compPenaltyWeight"`
+	SuppBonusWeight      float64 `json:"suppBonusWeight"`
+	CostPenaltyWeight    float64 `json:"costPenaltyWeight"`
+	RatingBonusWeight    float64 `json:"ratingBonusWeight"`
+	FoodDesertBonus      float64 `json:"foodDesertBonus"`
+	GentrificationWeight float64 `json:"gentrificationWeight"`
+}
+
+var BusinessProfiles = []BusinessConfig{
+	{NAICS: "445", Name: "Food and Beverage Stores (Grocery)", TrafficWeight: 1.5, CompPenaltyWeight: 10.0, SuppBonusWeight: 2.0, CostPenaltyWeight: 5.0, RatingBonusWeight: 0.0, FoodDesertBonus: 25.0, GentrificationWeight: -2.0},
+	{NAICS: "722", Name: "Food Services and Drinking Places", TrafficWeight: 2.0, CompPenaltyWeight: 8.0, SuppBonusWeight: 1.5, CostPenaltyWeight: 8.0, RatingBonusWeight: 15.0, FoodDesertBonus: 0.0, GentrificationWeight: 5.0},
+	{NAICS: "454", Name: "Nonstore Retailers (Food Trucks/Stands)", TrafficWeight: 3.0, CompPenaltyWeight: 5.0, SuppBonusWeight: 3.0, CostPenaltyWeight: 2.0, RatingBonusWeight: 10.0, FoodDesertBonus: 10.0, GentrificationWeight: 2.0},
+	{NAICS: "311811", Name: "Retail Bakeries", TrafficWeight: 2.0, CompPenaltyWeight: 6.0, SuppBonusWeight: 2.0, CostPenaltyWeight: 6.0, RatingBonusWeight: 12.0, FoodDesertBonus: 5.0, GentrificationWeight: 4.0},
+	{NAICS: "445110", Name: "Supermarkets (Healthy Grocery)", TrafficWeight: 1.5, CompPenaltyWeight: 12.0, SuppBonusWeight: 2.5, CostPenaltyWeight: 7.0, RatingBonusWeight: 5.0, FoodDesertBonus: 30.0, GentrificationWeight: -5.0},
+}
+
 type ScoreConfig struct {
 	UseFootTraffic      bool
 	UseCosts            bool
@@ -104,11 +125,13 @@ type ScoreConfig struct {
 	ComputationMethod   string
 
 	// Dynamic Weights
-	TrafficWeight     float64
-	CompPenaltyWeight float64
-	SuppBonusWeight   float64
-	CostPenaltyWeight float64
-	RatingBonusWeight float64
+	TrafficWeight        float64
+	CompPenaltyWeight    float64
+	SuppBonusWeight      float64
+	CostPenaltyWeight    float64
+	RatingBonusWeight    float64
+	FoodDesertBonus      float64
+	GentrificationWeight float64
 }
 
 // Structs for Enterprise Planning Engine (EPE) JSON response
@@ -165,16 +188,22 @@ type TaxRecord struct {
 	NAICS   string
 }
 
+type BusinessRecommendation struct {
+	Profile BusinessConfig `json:"profile"`
+	Score   float64        `json:"score"`
+	Details string         `json:"details"`
+}
+
 var gmData []GMRecord
 var taxData []TaxRecord
 var calculationCache sync.Map
 
 func getCacheKey(prefix, keyword, foodDesert, rent, popularity string, latStart, latEnd, lngStart, lngEnd float64, config ScoreConfig) string {
-	raw := fmt.Sprintf("%s|%s|%s|%s|%s|%.3f|%.3f|%.3f|%.3f|%v|%v|%v|%v|%s|%s|%.2f|%.2f|%.2f|%.2f|%.2f",
+	raw := fmt.Sprintf("%s|%s|%s|%s|%s|%.3f|%.3f|%.3f|%.3f|%v|%v|%v|%v|%s|%s|%.2f|%.2f|%.2f|%.2f|%.2f|%.2f|%.2f",
 		prefix, keyword, foodDesert, rent, popularity, latStart, latEnd, lngStart, lngEnd,
 		config.UseFootTraffic, config.UseCosts, config.UseCompetitors, config.AllowApproximations,
 		config.BusinessType, config.ComputationMethod, config.TrafficWeight, config.CompPenaltyWeight,
-		config.SuppBonusWeight, config.CostPenaltyWeight, config.RatingBonusWeight)
+		config.SuppBonusWeight, config.CostPenaltyWeight, config.RatingBonusWeight, config.FoodDesertBonus, config.GentrificationWeight)
 	hash := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(hash[:])
 }
@@ -202,6 +231,8 @@ func main() {
 	})
 
 	// Core API Endpoints
+	r.Get("/api/business-profiles", app.handleBusinessProfiles)
+	r.Get("/api/recommend-business", app.handleRecommendBusiness)
 	r.Get("/api/opportunity-map", app.handleManualOpportunityMap)
 	r.Get("/api/evaluate-location", app.handleEvaluateLocation)
 	r.Post("/api/agent/chat", app.handleAgentChat)
@@ -400,6 +431,14 @@ func (a *App) InitDB() {
 	log.Printf("Warning: Could not establish connection to SDSC database: %v", err)
 }
 
+func (a *App) getDemographicsHeuristic(lat, lng float64) (bool, float64, float64) {
+	// Simple spatial heuristic for food deserts mapping (Southeast SD boundaries proxy)
+	isFoodDesert := (lng > -117.15 && lng < -117.05 && lat > 32.65 && lat < 32.75) || (lng > -117.10 && lat > 32.85 && lat < 32.90)
+	baseIncome := 65000.0 + (lat-32.0)*15000.0
+	gentVal := 2.4 + (lng+117.0)*4.5
+	return isFoodDesert, baseIncome, gentVal
+}
+
 func (a *App) calculateOpportunityScore(lat, lng float64, config ScoreConfig) (int, float64, int, int, int, float64, int, int, string) {
 	compCount := 0
 	suppCount := 0
@@ -429,10 +468,9 @@ func (a *App) calculateOpportunityScore(lat, lng float64, config ScoreConfig) (i
 			distMeters := math.Sqrt(distSq) * 111000
 			weight := 1.0
 
-			// Adjust distance decay based on computation method
 			if config.ComputationMethod == "boutique" {
 				if distMeters > 500 {
-					weight = 500.0 / distMeters // Slower decay for boutique
+					weight = 500.0 / distMeters
 				}
 			} else {
 				if distMeters > 50 {
@@ -446,25 +484,24 @@ func (a *App) calculateOpportunityScore(lat, lng float64, config ScoreConfig) (i
 			isCompetitor := false
 			isSupportive := false
 
-			// Granular NAICS-based semantic separation for competitor vs supportive
 			if isFoodRelated {
-				if config.BusinessType == "445" { // Food and Beverage Stores (Grocery)
+				if strings.HasPrefix(config.BusinessType, "445") {
 					if strings.Contains(catLower, "grocery") || strings.Contains(catLower, "supermarket") {
 						isCompetitor = true
 					} else if strings.Contains(catLower, "farm") || strings.Contains(catLower, "wholesale") || strings.Contains(catLower, "restaurant") {
-						isSupportive = true // Restaurants and farms support grocery ecosystems
+						isSupportive = true
 					}
-				} else if config.BusinessType == "722" { // Food Services (Restaurants)
+				} else if strings.HasPrefix(config.BusinessType, "722") {
 					if strings.Contains(catLower, "restaurant") || strings.Contains(catLower, "cafe") {
 						isCompetitor = true
 					} else if strings.Contains(catLower, "grocery") || strings.Contains(catLower, "bar") {
-						isSupportive = true // Groceries supply them; bars drive foot traffic
+						isSupportive = true
 					}
-				} else if config.BusinessType == "454" { // Nonstore/Food Trucks
+				} else if strings.HasPrefix(config.BusinessType, "454") {
 					if strings.Contains(catLower, "truck") || strings.Contains(catLower, "stand") {
 						isCompetitor = true
 					} else if strings.Contains(catLower, "park") || strings.Contains(catLower, "brewery") {
-						isSupportive = true // Breweries and parks heavily support food trucks
+						isSupportive = true
 					}
 				} else {
 					if strings.Contains(catLower, "restaurant") {
@@ -490,7 +527,6 @@ func (a *App) calculateOpportunityScore(lat, lng float64, config ScoreConfig) (i
 				suppCount++
 				suppBonus += weight * config.SuppBonusWeight
 			} else {
-				// Standard foot traffic generator (retail, offices, etc)
 				reviewSum += gm.ReviewCount
 				trafficScore += weight * (float64(gm.ReviewCount) / 100.0) * config.TrafficWeight
 				if gm.HasPopTimes {
@@ -511,10 +547,7 @@ func (a *App) calculateOpportunityScore(lat, lng float64, config ScoreConfig) (i
 		avgRating = ratingSum / float64(compCount)
 	}
 
-	// Re-balanced Baseline based on valid business zones
 	baseScore := 45.0
-
-	// Normalize Maximums
 	if trafficScore > 40.0 {
 		trafficScore = 40.0
 	}
@@ -535,7 +568,8 @@ func (a *App) calculateOpportunityScore(lat, lng float64, config ScoreConfig) (i
 		ratingBonus = (4.0 - avgRating) * config.RatingBonusWeight
 	}
 
-	// Apply Filter Overrides
+	isFoodDesert, _, gentVal := a.getDemographicsHeuristic(lat, lng)
+
 	if !config.UseFootTraffic {
 		trafficScore = 20.0
 	}
@@ -549,14 +583,20 @@ func (a *App) calculateOpportunityScore(lat, lng float64, config ScoreConfig) (i
 
 	finalScore := baseScore + trafficScore + suppBonus - compPenalty - costPenalty + ratingBonus
 
+	// Apply Demographic adjustments
+	if isFoodDesert {
+		finalScore += config.FoodDesertBonus
+	}
+	finalScore += gentVal * config.GentrificationWeight
+
 	if finalScore > 100.0 {
 		finalScore = 100.0
 	} else if finalScore < 0.0 {
 		finalScore = 0.0
 	}
 
-	logStr := fmt.Sprintf("Base: %.1f | Traffic Add: +%.1f | Supp Bonus: +%.1f | Comp Pen: -%.1f | Cost Pen: -%.1f | Gap Bonus: +%.1f",
-		baseScore, trafficScore, suppBonus, compPenalty, costPenalty, ratingBonus)
+	logStr := fmt.Sprintf("Base: %.1f | Traffic Add: +%.1f | Supp Bonus: +%.1f | Comp Pen: -%.1f | Cost Pen: -%.1f | Gap Bonus: +%.1f | FD Bonus: +%.1f | Gentrif Mod: %.1f",
+		baseScore, trafficScore, suppBonus, compPenalty, costPenalty, ratingBonus, config.FoodDesertBonus, gentVal*config.GentrificationWeight)
 
 	return int(finalScore), avgPrice, reviewSum, compCount, suppCount, avgRating, popCount, resCount, logStr
 }
@@ -573,22 +613,72 @@ func parseFloatParam(r *http.Request, key string, defaultVal float64) float64 {
 	return val
 }
 
+func (a *App) handleBusinessProfiles(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(BusinessProfiles)
+}
+
+func (a *App) handleRecommendBusiness(w http.ResponseWriter, r *http.Request) {
+	latStr := r.URL.Query().Get("lat")
+	lngStr := r.URL.Query().Get("lng")
+
+	lat, _ := strconv.ParseFloat(latStr, 64)
+	lng, _ := strconv.ParseFloat(lngStr, 64)
+
+	var recommendations []BusinessRecommendation
+
+	for _, profile := range BusinessProfiles {
+		config := ScoreConfig{
+			UseFootTraffic:       true,
+			UseCosts:             true,
+			UseCompetitors:       true,
+			AllowApproximations:  true,
+			BusinessType:         profile.NAICS,
+			ComputationMethod:    "standard",
+			TrafficWeight:        profile.TrafficWeight,
+			CompPenaltyWeight:    profile.CompPenaltyWeight,
+			SuppBonusWeight:      profile.SuppBonusWeight,
+			CostPenaltyWeight:    profile.CostPenaltyWeight,
+			RatingBonusWeight:    profile.RatingBonusWeight,
+			FoodDesertBonus:      profile.FoodDesertBonus,
+			GentrificationWeight: profile.GentrificationWeight,
+		}
+
+		score, _, _, compCount, suppCount, _, _, _, logStr := a.calculateOpportunityScore(lat, lng, config)
+
+		recommendations = append(recommendations, BusinessRecommendation{
+			Profile: profile,
+			Score:   float64(score),
+			Details: fmt.Sprintf("Competitors: %d | Supporters: %d | Log: %s", compCount, suppCount, logStr),
+		})
+	}
+
+	sort.Slice(recommendations, func(i, j int) bool {
+		return recommendations[i].Score > recommendations[j].Score
+	})
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(recommendations)
+}
+
 func (a *App) handleEvaluateLocation(w http.ResponseWriter, r *http.Request) {
 	latStr := r.URL.Query().Get("lat")
 	lngStr := r.URL.Query().Get("lng")
 
 	config := ScoreConfig{
-		UseFootTraffic:      r.URL.Query().Get("useFootTraffic") != "false",
-		UseCosts:            r.URL.Query().Get("useCosts") != "false",
-		UseCompetitors:      r.URL.Query().Get("useCompetitors") != "false",
-		AllowApproximations: r.URL.Query().Get("allowApproximations") != "false",
-		BusinessType:        r.URL.Query().Get("naics"),
-		ComputationMethod:   r.URL.Query().Get("computationMethod"),
-		TrafficWeight:       parseFloatParam(r, "trafficW", 1.0),
-		CompPenaltyWeight:   parseFloatParam(r, "compW", 8.0),
-		SuppBonusWeight:     parseFloatParam(r, "suppW", 1.5),
-		CostPenaltyWeight:   parseFloatParam(r, "costW", 5.0),
-		RatingBonusWeight:   parseFloatParam(r, "ratingW", 15.0),
+		UseFootTraffic:       r.URL.Query().Get("useFootTraffic") != "false",
+		UseCosts:             r.URL.Query().Get("useCosts") != "false",
+		UseCompetitors:       r.URL.Query().Get("useCompetitors") != "false",
+		AllowApproximations:  r.URL.Query().Get("allowApproximations") != "false",
+		BusinessType:         r.URL.Query().Get("naics"),
+		ComputationMethod:    r.URL.Query().Get("computationMethod"),
+		TrafficWeight:        parseFloatParam(r, "trafficW", 1.0),
+		CompPenaltyWeight:    parseFloatParam(r, "compW", 8.0),
+		SuppBonusWeight:      parseFloatParam(r, "suppW", 1.5),
+		CostPenaltyWeight:    parseFloatParam(r, "costW", 5.0),
+		RatingBonusWeight:    parseFloatParam(r, "ratingW", 15.0),
+		FoodDesertBonus:      parseFloatParam(r, "foodDesertW", 0.0),
+		GentrificationWeight: parseFloatParam(r, "gentrificationW", 0.0),
 	}
 
 	lat, _ := strconv.ParseFloat(latStr, 64)
@@ -596,7 +686,6 @@ func (a *App) handleEvaluateLocation(w http.ResponseWriter, r *http.Request) {
 
 	score, avgPrice, totalReviews, calcCompCount, calcSuppCount, avgRating, popCount, resCount, calcLog := a.calculateOpportunityScore(lat, lng, config)
 
-	// Prepare EPE Compliant Response
 	resp := LocationEvalResponse{
 		Lat:                         lat,
 		Lng:                         lng,
@@ -624,10 +713,7 @@ func (a *App) handleEvaluateLocation(w http.ResponseWriter, r *http.Request) {
 				resp.Demographics.FoodInsecurityRate = &foodInsecRate.Float64
 			}
 			resp.Demographics.Source = "nourish_cbg_food_environment & esri_variables"
-
-			if isFoodDesert {
-				resp.OpportunityScore += 15.0
-			}
+			// Score logic relies on calculateOpportunityScore weights now. No manual static additions here.
 		}
 
 		var zoneName string
@@ -649,7 +735,6 @@ func (a *App) handleEvaluateLocation(w http.ResponseWriter, r *http.Request) {
 			resp.OperatingCosts.LaborCostPct = &laborCost
 			resp.OperatingCosts.Source = "SBA Guidelines & Database Ref"
 		} else {
-			// SBA Default standard for food service
 			lc := 32.5
 			resp.OperatingCosts.LaborCostPct = &lc
 		}
@@ -661,21 +746,15 @@ func (a *App) handleEvaluateLocation(w http.ResponseWriter, r *http.Request) {
 			resp.FootTrafficSource = "Direct UCSF Proxy Counts"
 		}
 	} else {
-		// Mock SBA standard defaults if no DB
 		lc := 32.5
 		resp.OperatingCosts.LaborCostPct = &lc
 	}
 
-	// Calculate Dynamic Indicators (Ilya's request)
-	// In production, this queries `esri_19k_variables_2025` or `nourish_cbg_demographics`
-	// Fallback heuristic map generation to demonstrate JSON structure for EPE
-	baseIncome := 65000.0 + (lat-32.0)*15000.0
+	_, baseIncome, gentVal := a.getDemographicsHeuristic(lat, lng)
 	resp.Demographics.IncomeLevel = &baseIncome
-
-	gentVal := 2.4 + (lng+117.0)*4.5 // Positive indicator = increasing property value/gentrification
 	resp.Demographics.GentrificationIndicator = &gentVal
 
-	popGrow := 3.2 // Percentage growth indicator
+	popGrow := 3.2
 	resp.Demographics.TargetPopulationGrowth = &popGrow
 
 	if resp.FootTraffic == nil {
@@ -686,17 +765,16 @@ func (a *App) handleEvaluateLocation(w http.ResponseWriter, r *http.Request) {
 			resp.IsApproximated = true
 		} else {
 			resp.FootTrafficSource = "Approximations Disabled (Strict Mode)"
-			resp.FootTraffic = nil // Keep strictly null
+			resp.FootTraffic = nil
 		}
 	}
 
-	// SBA Cost Estimates
 	if avgPrice > 2.5 {
 		resp.OperatingCosts.Source = "High Land Cost Matrix (SBA)"
-		r := 45.0 // $45/sqft/yr
+		r := 45.0
 		resp.OperatingCosts.EstimatedRent = &r
 	} else if avgPrice > 0 {
-		r := 25.0 // $25/sqft/yr
+		r := 25.0
 		resp.OperatingCosts.EstimatedRent = &r
 	} else {
 		r := 18.0
@@ -793,11 +871,11 @@ func (a *App) getDynamicCompetitors(latStart, latEnd, lngStart, lngEnd float64, 
 			catLower := strings.ToLower(gm.Category)
 
 			isCompetitor := false
-			if config.BusinessType == "445" && (strings.Contains(catLower, "grocery") || strings.Contains(catLower, "supermarket")) {
+			if strings.HasPrefix(config.BusinessType, "445") && (strings.Contains(catLower, "grocery") || strings.Contains(catLower, "supermarket")) {
 				isCompetitor = true
-			} else if config.BusinessType == "722" && (strings.Contains(catLower, "restaurant") || strings.Contains(catLower, "cafe")) {
+			} else if strings.HasPrefix(config.BusinessType, "722") && (strings.Contains(catLower, "restaurant") || strings.Contains(catLower, "cafe")) {
 				isCompetitor = true
-			} else if config.BusinessType == "454" && (strings.Contains(catLower, "truck") || strings.Contains(catLower, "stand")) {
+			} else if strings.HasPrefix(config.BusinessType, "454") && (strings.Contains(catLower, "truck") || strings.Contains(catLower, "stand")) {
 				isCompetitor = true
 			} else if config.BusinessType == "" && (strings.Contains(catLower, "restaurant") || strings.Contains(catLower, "food")) {
 				isCompetitor = true
@@ -828,17 +906,19 @@ func (a *App) handleManualOpportunityMap(w http.ResponseWriter, r *http.Request)
 	popularity := r.URL.Query().Get("popularity")
 
 	config := ScoreConfig{
-		UseFootTraffic:      r.URL.Query().Get("useFootTraffic") != "false",
-		UseCosts:            r.URL.Query().Get("useCosts") != "false",
-		UseCompetitors:      r.URL.Query().Get("useCompetitors") != "false",
-		AllowApproximations: r.URL.Query().Get("allowApproximations") != "false",
-		BusinessType:        naics,
-		ComputationMethod:   r.URL.Query().Get("computationMethod"),
-		TrafficWeight:       parseFloatParam(r, "trafficW", 1.0),
-		CompPenaltyWeight:   parseFloatParam(r, "compW", 8.0),
-		SuppBonusWeight:     parseFloatParam(r, "suppW", 1.5),
-		CostPenaltyWeight:   parseFloatParam(r, "costW", 5.0),
-		RatingBonusWeight:   parseFloatParam(r, "ratingW", 15.0),
+		UseFootTraffic:       r.URL.Query().Get("useFootTraffic") != "false",
+		UseCosts:             r.URL.Query().Get("useCosts") != "false",
+		UseCompetitors:       r.URL.Query().Get("useCompetitors") != "false",
+		AllowApproximations:  r.URL.Query().Get("allowApproximations") != "false",
+		BusinessType:         naics,
+		ComputationMethod:    r.URL.Query().Get("computationMethod"),
+		TrafficWeight:        parseFloatParam(r, "trafficW", 1.0),
+		CompPenaltyWeight:    parseFloatParam(r, "compW", 8.0),
+		SuppBonusWeight:      parseFloatParam(r, "suppW", 1.5),
+		CostPenaltyWeight:    parseFloatParam(r, "costW", 5.0),
+		RatingBonusWeight:    parseFloatParam(r, "ratingW", 15.0),
+		FoodDesertBonus:      parseFloatParam(r, "foodDesertW", 0.0),
+		GentrificationWeight: parseFloatParam(r, "gentrificationW", 0.0),
 	}
 
 	nStr := r.URL.Query().Get("n")
@@ -1007,16 +1087,18 @@ func (a *App) handleAgentChat(w http.ResponseWriter, r *http.Request) {
 	workspace := "LLM Analyzed View"
 
 	config := ScoreConfig{
-		UseFootTraffic:      true,
-		UseCosts:            true,
-		UseCompetitors:      true,
-		AllowApproximations: true,
-		ComputationMethod:   "standard",
-		TrafficWeight:       1.0,
-		CompPenaltyWeight:   8.0,
-		SuppBonusWeight:     1.5,
-		CostPenaltyWeight:   5.0,
-		RatingBonusWeight:   15.0,
+		UseFootTraffic:       true,
+		UseCosts:             true,
+		UseCompetitors:       true,
+		AllowApproximations:  true,
+		ComputationMethod:    "standard",
+		TrafficWeight:        1.0,
+		CompPenaltyWeight:    8.0,
+		SuppBonusWeight:      1.5,
+		CostPenaltyWeight:    5.0,
+		RatingBonusWeight:    15.0,
+		FoodDesertBonus:      0.0,
+		GentrificationWeight: 0.0,
 	}
 	oppPoints, _, _, _ := a.getRealOpportunities(latStart, latEnd, lngStart, lngEnd, config)
 	compPoints := a.getDynamicCompetitors(latStart, latEnd, lngStart, lngEnd, config)
@@ -1102,7 +1184,7 @@ func (a *App) handleSwaggerJSON(w http.ResponseWriter, r *http.Request) {
   "openapi": "3.0.0",
   "info": {
     "title": "Nourish PT Opportunity API",
-    "description": "API for querying food business opportunities and dynamic map calculations.",
+    "description": "API for querying food business opportunities, NAICS modeling, and dynamic map calculations.",
     "version": "1.0.0"
   },
   "paths": {
@@ -1123,7 +1205,7 @@ func (a *App) handleSwaggerJSON(w http.ResponseWriter, r *http.Request) {
     },
     "/api/opportunity-map": {
       "get": {
-        "summary": "Fetch opportunity score map nodes",
+        "summary": "Fetch opportunity score map nodes (Find best locations for a given Business Type)",
         "parameters":[
           {"name": "n", "in": "query", "schema": {"type": "number"}},
           {"name": "s", "in": "query", "schema": {"type": "number"}},
@@ -1133,6 +1215,26 @@ func (a *App) handleSwaggerJSON(w http.ResponseWriter, r *http.Request) {
         ],
         "responses": {
           "200": { "description": "Returns points formatted for canvas/WebGL heatmap interpolation" }
+        }
+      }
+    },
+    "/api/recommend-business": {
+      "get": {
+        "summary": "Recommend best business types for a given location",
+        "parameters":[
+          {"name": "lat", "in": "query", "required": true, "schema": {"type": "number"}},
+          {"name": "lng", "in": "query", "required": true, "schema": {"type": "number"}}
+        ],
+        "responses": {
+          "200": { "description": "Returns a sorted array of business recommendations based on the opportunity score framework" }
+        }
+      }
+    },
+    "/api/business-profiles": {
+      "get": {
+        "summary": "List available configured business profiles and their default scoring weights",
+        "responses": {
+          "200": { "description": "Array of BusinessConfig objects" }
         }
       }
     }
