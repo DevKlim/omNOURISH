@@ -42,6 +42,32 @@ body {
   color: #444746;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.icon-btn {
+  background: transparent;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #1f1f1f;
+  transition: background 0.2s;
+}
+
+.icon-btn:hover {
+  background: #f0f4f9;
+}
+
 /* Layout Grid */
 .app-container {
   display: flex;
@@ -210,6 +236,38 @@ body {
   box-shadow: 0 0 0 1px #0b57d0;
 }
 
+/* Time/Spatial Slider Inputs */
+.slider-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.time-slider {
+  width: 100%;
+  appearance: none;
+  height: 6px;
+  background: #d3e3fd;
+  border-radius: 4px;
+  outline: none;
+}
+
+.time-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #0b57d0;
+  cursor: pointer;
+}
+
+.time-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #0b57d0;
+  text-align: center;
+}
+
 .primary-btn {
   background-color: #0b57d0;
   color: white;
@@ -233,6 +291,19 @@ body {
   background-color: #e0e0e0;
   color: #a8a8a8;
   cursor: not-allowed;
+}
+
+/* Tooltip Enhancements */
+.assumption-item:hover .tooltip-icon {
+  color: #0b57d0;
+}
+
+.tooltip-icon {
+  font-weight: bold;
+  cursor: help;
+  color: #747775;
+  font-size: 10px;
+  transition: color 0.2s;
 }
 
 /* Map */
@@ -266,19 +337,124 @@ body {
   right: 16px;
   z-index: 1000;
   background: white;
-  padding: 20px;
+  padding: 0;
   border-radius: 12px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-  width: 320px;
+  width: 360px;
   border-top: 6px solid #0b57d0;
+  overflow: hidden;
+}
+
+.evaluation-panel > div:first-child {
+  padding: 16px 20px 0 20px;
 }
 
 .evaluation-panel h3 {
   font-size: 16px;
-  margin-bottom: 16px;
   color: #1f1f1f;
   font-weight: 500;
+  margin: 0;
 }
+
+/* Evaluation Header */
+.eval-header-top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+  padding: 0 20px;
+}
+
+.eval-score-circle {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 18px;
+  font-weight: 700;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+}
+
+.eval-header-info p {
+  margin: 4px 0 0 0;
+  font-size: 12px;
+  color: #747775;
+  line-height: 1.4;
+}
+
+/* Accordion Sections */
+.accordion-section {
+  border-top: 1px solid #e0e0e0;
+}
+
+.accordion-header {
+  padding: 12px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  background-color: #f8f9fa;
+  transition: background-color 0.2s;
+}
+
+.accordion-header:hover {
+  background-color: #f0f4f9;
+}
+
+.accordion-header h4 {
+  margin: 0;
+  font-size: 13px;
+  color: #444746;
+}
+
+.accordion-header span {
+  font-size: 10px;
+  color: #747775;
+}
+
+.accordion-content {
+  padding: 16px 20px;
+  background-color: #ffffff;
+}
+
+/* Score Breakdown Items */
+.breakdown-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px;
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.breakdown-row.positive { background-color: #e6f4ea; }
+.breakdown-row.negative { background-color: #fce8e6; }
+.breakdown-row.neutral { background-color: #f0f4f9; }
+
+.bd-name {
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  color: #1f1f1f;
+}
+
+.bd-sub {
+  font-size: 10px;
+  color: #747775;
+  margin-top: 2px;
+}
+
+.bd-val {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+.breakdown-row.positive .bd-val { color: #0f9d58; }
+.breakdown-row.negative .bd-val { color: #b2182b; }
 
 .eval-metric {
   display: flex;

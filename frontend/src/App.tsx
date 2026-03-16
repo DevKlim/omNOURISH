@@ -20,6 +20,8 @@ type DetailedCosts = {
   estimatedRent: number | null;
   estimatedUtilities: number | null;
   laborCostPct: number | null;
+  startupCosts: number | null;
+  marketingPct: number | null;
   source: string;
 };
 
@@ -30,12 +32,34 @@ type Demographics = {
   foodDesertStatus: boolean;
   lowIncomeLowAccess: boolean;
   foodInsecurityRate: number | null;
+  daytimePopulation: number | null;
+  nighttimePopulation: number | null;
   source: string;
+};
+
+type ScoreOverrides = {
+  footTraffic: number | null;
+  rent: number | null;
+  startupCosts: number | null;
+  laborCostPct: number | null;
+  incomeLevel: number | null;
+  daytimePop: number | null;
+  nighttimePop: number | null;
+  marketingPct: number | null;
+};
+
+type ScoreComponent = {
+  name: string;
+  rawValue: number;
+  weight: number;
+  contribution: number;
+  impact: string;
 };
 
 type LocationEvalResponse = {
   lat: number;
   lng: number;
+  resolvedAddress: string;
   opportunityScore: number;
   footTraffic: number | null;
   footTrafficSource: string;
@@ -47,8 +71,9 @@ type LocationEvalResponse = {
   demographicProfile: string;
   reviewCount: number;
   statsExtra: string;
-  calcLog: string;
+  calcBreakdown: ScoreComponent[];
   citywideActiveTaxCompetitor: number;
+  assumptions: string[];
 };
 
 function MapEventHandler({ onBoundsChange, onLocationSelect }: { 
@@ -67,30 +92,44 @@ function MapEventHandler({ onBoundsChange, onLocationSelect }: {
   return null;
 }
 
+const getRecommendationForAssumption = (text: string) => {
+  if (text.includes("USDA Food Environment")) return "Visit the USDA Food Access Research Atlas online to check census tract status.";
+  if (text.includes("Demographics (Income")) return "Consult Census Reporter or ACS data for this block group.";
+  if (text.includes("Daytime/Nighttime Population")) return "Check local business association or city census daytime population estimates.";
+  if (text.includes("rent spatial data")) return "Check LoopNet or Crexi for local commercial real estate lease rates per sqft.";
+  if (text.includes("reference economics")) return "Consult local restaurant associations or SBA benchmark reports.";
+  if (text.includes("Startup Costs =")) return "Create a custom business plan or consult an SBDC advisor for accurate local estimates.";
+  if (text.includes("Marketing Budget =")) return "Typical marketing benchmarks for food biz range from 3-7% of revenue.";
+  if (text.includes("road proximity")) return "Check Google Maps for distance to nearest major highway or primary road.";
+  if (text.includes("Low review count") || text.includes("approximate UCSF foot traffic")) return "Conduct a manual 1-hour pedestrian count at the location during peak target time.";
+  return "Consult local real estate or SBA resources for missing parameter estimates.";
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<'home' | 'map' | 'recommend' | 'db_explorer'>('map');
   const [activeWorkspace, setActiveWorkspace] = useState('General Food Business');
   const [messages, setMessages] = useState<Message[]>([
     { id: 1, sender: 'agent', text: 'Hello. I am the Nourish PT Data Agent backed by the AI Gateway. How can I help you find gaps in the market today?' }
   ]);
-  const [inputValue, setInputValue] = useState('');
+  const[inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const[activeLayers, setActiveLayers] = useState<string[]>(['base_map']);
+  const [activeLayers, setActiveLayers] = useState<string[]>(['base_map']);
   
   const[naicsFilter, setNaicsFilter] = useState('445');
-  const [mapPoints, setMapPoints] = useState<MapData[]>([]);
+  const[mapPoints, setMapPoints] = useState<MapData[]>([]);
   const [debugInfo, setDebugInfo] = useState<any>(null);
   const [businessProfiles, setBusinessProfiles] = useState<any[]>([]);
 
   // General Config
   const [allowApproximations, setAllowApproximations] = useState(true);
-  const[computationMethod, setComputationMethod] = useState('standard');
-  const [liveCalculation, setLiveCalculation] = useState(true);
+  const [computationMethod, setComputationMethod] = useState('standard');
+  const[liveCalculation, setLiveCalculation] = useState(true);
   const [showLiveWarning, setShowLiveWarning] = useState(false);
   const searchHistoryRef = useRef<number[]>([]);
+  const[addressInput, setAddressInput] = useState('');
   
   // Custom Scoring Profiles
-  const[scoringProfile, setScoringProfile] = useState('standard');
+  const [scoringProfile, setScoringProfile] = useState('standard');
   const [customWeights, setCustomWeights] = useState({
     traffic: 1.0,
     compPenalty: 8.0,
@@ -101,6 +140,39 @@ export default function App() {
     gentrificationWeight: 0.0
   });
 
+  // Data Overrides
+  const [overrides, setOverrides] = useState<ScoreOverrides>({
+    footTraffic: null, rent: null, startupCosts: null, laborCostPct: null, incomeLevel: null, daytimePop: null, nighttimePop: null, marketingPct: null
+  });
+
+  // Target Time Spatial Filters
+  const timeOptions =["Any / All Day", "Early Morning (4am-9am)", "Midday (9am-2pm)", "Afternoon (2pm-6pm)", "Evening/Night (6pm-12am)"];
+  const [timeSliderIndex, setTimeSliderIndex] = useState(0);
+
+  // Agent Chat State (Hidden By Default)
+  const [showAgentPanel, setShowAgentPanel] = useState(false);
+
+  const [recFilters, setRecFilters] = useState({
+    useFootTraffic: true,
+    useCosts: true,
+    useCompetitors: true,
+    allowApproximations: true
+  });
+
+  // Collapsible Evaluation Sections
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    assumptions: true,
+    overrides: false,
+    core: true,
+    demographics: false,
+    costs: false,
+    trace: true
+  });
+
+  const toggleSection = (key: string) => {
+    setExpandedSections(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
   useEffect(() => {
     fetch('http://localhost:8081/api/business-profiles')
       .then(res => res.json())
@@ -110,7 +182,8 @@ export default function App() {
 
   useEffect(() => {
      setSelectedLocation(null);
-  }, [activeTab]);
+     setOverrides({footTraffic: null, rent: null, startupCosts: null, laborCostPct: null, incomeLevel: null, daytimePop: null, nighttimePop: null, marketingPct: null});
+  },[activeTab]);
 
   const handleProfileChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const val = e.target.value;
@@ -130,9 +203,13 @@ export default function App() {
     setCustomWeights(prev => ({...prev,[field]: parseFloat(value) || 0}));
   };
 
-  const [showAgentSettings, setShowAgentSettings] = useState(false);
+  const handleOverrideChange = (field: keyof typeof overrides, value: string) => {
+    setOverrides(prev => ({...prev, [field]: value === '' ? null : parseFloat(value)}));
+  };
+
+  const[showAgentSettings, setShowAgentSettings] = useState(false);
   const [llmProvider, setLlmProvider] = useState(localStorage.getItem('llm_provider') || 'NRP');
-  const [llmApiKey, setLlmApiKey] = useState(localStorage.getItem('llm_api_key') || '');
+  const[llmApiKey, setLlmApiKey] = useState(localStorage.getItem('llm_api_key') || '');
   const[llmModel, setLlmModel] = useState(localStorage.getItem('llm_model') || 'gpt-oss');
   const [llmBaseUrl, setLlmBaseUrl] = useState(localStorage.getItem('llm_base_url') || '');
 
@@ -145,7 +222,7 @@ export default function App() {
 
   const [heatmapMode, setHeatmapMode] = useState(true);
 
-  const[mapBounds, setMapBounds] = useState<{n: number, s: number, e: number, w: number} | null>({
+  const [mapBounds, setMapBounds] = useState<{n: number, s: number, e: number, w: number} | null>({
     n: 32.95, s: 32.65, e: -116.95, w: -117.30
   });
   
@@ -154,7 +231,7 @@ export default function App() {
   const [isEvaluating, setIsEvaluating] = useState(false);
 
   const[recommendations, setRecommendations] = useState<any[]>([]);
-  const [isRecommending, setIsRecommending] = useState(false);
+  const[isRecommending, setIsRecommending] = useState(false);
 
   const [exploreTable, setExploreTable] = useState('nourish_cbg_food_environment');
   const [exploreResult, setExploreResult] = useState('');
@@ -162,25 +239,31 @@ export default function App() {
   const quickTables =[
     "nourish_cbg_food_environment",
     "nourish_cbg_pedestrian_flow",
-    "san_diego_areawise_foot_traffic",
+    "nourish_cbg_population_time",
     "ca_laws_and_regulations",
     "nourish_cbg_demographics",
     "esri_consumer_spending_data_",
     "sandag_layer_zoning_base_sd_new",
     "nourish_comm_commissary_ext",
-    "nourish_ref_mobile_vendor_economics"
+    "nourish_ref_mobile_vendor_economics",
+    "2022_NAICS_Keywords"
   ];
 
-  const handleLocationSelect = async (lat: number, lng: number) => {
-    setSelectedLocation({ lat, lng });
-
+  const triggerEvaluation = async (lat: number | null, lng: number | null, address?: string, isOverrideSubmit: boolean = false) => {
     if (activeTab === 'recommend') {
       setIsRecommending(true);
       setRecommendations([]);
       try {
-        const response = await fetch(`http://localhost:8081/api/recommend-business?lat=${lat}&lng=${lng}`);
+        let url = `http://localhost:8081/api/recommend-business?useFootTraffic=${recFilters.useFootTraffic}&useCosts=${recFilters.useCosts}&useCompetitors=${recFilters.useCompetitors}&allowApproximations=${recFilters.allowApproximations}&targetTime=${encodeURIComponent(timeOptions[timeSliderIndex])}`;
+        if (address) url += `&address=${encodeURIComponent(address)}`;
+        if (lat && lng) url += `&lat=${lat}&lng=${lng}`;
+
+        const response = await fetch(url);
         const data = await response.json();
-        setRecommendations(data ||[]);
+        setRecommendations(data.recommendations ||[]);
+        if (data.resolvedLat && data.resolvedLng) {
+          setSelectedLocation({lat: data.resolvedLat, lng: data.resolvedLng});
+        }
       } catch (error) {
         console.error("Recommendation failed", error);
       } finally {
@@ -188,18 +271,59 @@ export default function App() {
       }
     } else {
       setIsEvaluating(true);
-      setLocationEval(null);
+      if (!isOverrideSubmit) {
+        setLocationEval(null);
+        setOverrides({footTraffic: null, rent: null, startupCosts: null, laborCostPct: null, incomeLevel: null, daytimePop: null, nighttimePop: null, marketingPct: null});
+      }
 
       try {
-        const response = await fetch(`http://localhost:8081/api/evaluate-location?lat=${lat}&lng=${lng}&naics=${naicsFilter}&allowApproximations=${allowApproximations}&computationMethod=${computationMethod}&trafficW=${customWeights.traffic}&compW=${customWeights.compPenalty}&suppW=${customWeights.suppBonus}&costW=${customWeights.costPenalty}&ratingW=${customWeights.ratingBonus}&foodDesertW=${customWeights.foodDesertBonus}&gentrificationW=${customWeights.gentrificationWeight}`);
+        const payload = {
+          lat: lat || 0,
+          lng: lng || 0,
+          address: address || "",
+          useFootTraffic: true,
+          useCosts: true,
+          useCompetitors: true,
+          allowApproximations: allowApproximations,
+          naics: naicsFilter,
+          computationMethod: computationMethod,
+          targetTime: timeOptions[timeSliderIndex],
+          trafficW: customWeights.traffic,
+          compW: customWeights.compPenalty,
+          suppW: customWeights.suppBonus,
+          costW: customWeights.costPenalty,
+          ratingW: customWeights.ratingBonus,
+          foodDesertW: customWeights.foodDesertBonus,
+          gentrificationW: customWeights.gentrificationWeight,
+          overrides: isOverrideSubmit ? overrides : {}
+        };
+
+        const response = await fetch(`http://localhost:8081/api/evaluate-location`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
         const data = await response.json();
         setLocationEval(data);
+        if (data.lat && data.lng) {
+          setSelectedLocation({lat: data.lat, lng: data.lng});
+        }
       } catch (error) {
         console.error("Evaluation failed", error);
       } finally {
         setIsEvaluating(false);
       }
     }
+  };
+
+  const handleLocationSelect = (lat: number, lng: number) => {
+    setSelectedLocation({ lat, lng });
+    triggerEvaluation(lat, lng);
+  };
+
+  const handleAddressSearch = () => {
+    if (!addressInput.trim()) return;
+    triggerEvaluation(null, null, addressInput);
   };
 
   const handleSendMessage = async () => {
@@ -247,7 +371,7 @@ export default function App() {
 
     setIsLoading(true);
     try {
-      let url = `http://localhost:8081/api/opportunity-map?naics=${naicsFilter}&allowApproximations=${allowApproximations}&computationMethod=${computationMethod}&trafficW=${customWeights.traffic}&compW=${customWeights.compPenalty}&suppW=${customWeights.suppBonus}&costW=${customWeights.costPenalty}&ratingW=${customWeights.ratingBonus}&foodDesertW=${customWeights.foodDesertBonus}&gentrificationW=${customWeights.gentrificationWeight}`;
+      let url = `http://localhost:8081/api/opportunity-map?naics=${naicsFilter}&allowApproximations=${allowApproximations}&computationMethod=${computationMethod}&targetTime=${encodeURIComponent(timeOptions[timeSliderIndex])}&trafficW=${customWeights.traffic}&compW=${customWeights.compPenalty}&suppW=${customWeights.suppBonus}&costW=${customWeights.costPenalty}&ratingW=${customWeights.ratingBonus}&foodDesertW=${customWeights.foodDesertBonus}&gentrificationW=${customWeights.gentrificationWeight}`;
       if (mapBounds) {
         url += `&n=${mapBounds.n}&s=${mapBounds.s}&e=${mapBounds.e}&w=${mapBounds.w}`;
       }
@@ -281,7 +405,7 @@ export default function App() {
       return () => clearTimeout(delayDebounceFn);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[naicsFilter, allowApproximations, computationMethod, customWeights, mapBounds, activeTab, liveCalculation]);
+  },[naicsFilter, allowApproximations, computationMethod, customWeights, mapBounds, activeTab, liveCalculation, timeSliderIndex]);
 
   const handleExploreDB = async () => {
     setExploreResult('Querying database...');
@@ -314,15 +438,15 @@ export default function App() {
   };
 
   const getHeatmapColor = (score: number) => {
-    if (score > 85) return '#b2182b'; // Dark red/hot
-    if (score > 70) return '#ef8a62'; // Orange
-    if (score > 50) return '#fddbc7'; // Light orange
-    if (score > 35) return '#d1e5f0'; // Cool
-    return '#92c5de'; // Coldest
+    if (score > 40) return '#b2182b'; 
+    if (score > 25) return '#ef8a62'; 
+    if (score > 5) return '#fddbc7'; 
+    if (score > -10) return '#d1e5f0'; 
+    return '#92c5de'; 
   };
 
   const opportunityPoints = mapPoints.filter(p => p.type === 'opportunity');
-  const maxScore = opportunityPoints.length > 0 ? Math.max(...opportunityPoints.map(p => p.score)) : 0;
+  const maxScore = opportunityPoints.length > 0 ? Math.max(...opportunityPoints.map(p => p.score)) : Number.NEGATIVE_INFINITY;
 
   return (
     <>
@@ -334,6 +458,28 @@ export default function App() {
           Nourish PT
         </div>
         <div className="cloud-header-project">Live Food Business Opportunity Mapper</div>
+        
+        <div className="header-actions" style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+          {(activeTab === 'map' || activeTab === 'recommend') && (
+            <div style={{ display: 'flex', gap: '8px', maxWidth: '400px', width: '100%' }}>
+              <input 
+                type="text" 
+                className="control-input" 
+                placeholder="Search an address or block group..." 
+                value={addressInput}
+                onChange={e => setAddressInput(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleAddressSearch(); }}
+              />
+              <button className="primary-btn" style={{ width: 'auto', padding: '6px 16px' }} onClick={handleAddressSearch}>Find</button>
+            </div>
+          )}
+        </div>
+        
+        <div className="header-actions">
+          <button className="icon-btn" onClick={() => setShowAgentPanel(!showAgentPanel)}>
+            {showAgentPanel ? '💬 Hide AI Agent' : '💬 Show AI Agent'}
+          </button>
+        </div>
       </header>
 
       <div className="app-container">
@@ -381,12 +527,12 @@ export default function App() {
 
                   <h3>The Opportunity Scoring Methodology</h3>
                   <div className="equation-box">
-                    Opportunity Score = Base (45) + Foot Traffic Impact + Supportive Biz Bonus - Cost Penalties - Competition Penalties + Market Gap Bonus + Food Desert Offset
+                    Opportunity Score = Base (0) + Foot Traffic Impact + Supportive Biz Bonus - Cost Penalties - Competition Penalties + Market Gap Bonus + Food Desert Offset
                   </div>
 
                   <h3>Data Sources Being Queried</h3>
                   <ul>
-                    <li><strong>ca_business:</strong> Pinpoints competitor locations (augmented with Google Maps review counts & ratings).</li>
+                    <li><strong>ca_business:</strong> Pinpoints competitor locations (augmented with Google Maps review counts, ratings, and open hours).</li>
                     <li><strong>nourish_cbg_pedestrian_flow & san_diego_areawise_foot_traffic:</strong> UCSF foot traffic data to estimate organic walk-in volume.</li>
                     <li><strong>nourish_cbg_food_environment:</strong> USDA food desert block group cross-referencing.</li>
                     <li><strong>sandag_layer_zoning_base_sd_new:</strong> Commercial and Mixed-Use development zones.</li>
@@ -429,6 +575,21 @@ export default function App() {
                           </>
                       )}
                     </select>
+                  </div>
+
+                  <div className="control-group">
+                    <label>Target Time of Day (Time-Spatial Focus)</label>
+                    <div className="slider-container" style={{ marginTop: '8px', padding: '4px' }}>
+                      <input 
+                        type="range" 
+                        className="time-slider" 
+                        min="0" 
+                        max={timeOptions.length - 1} 
+                        value={timeSliderIndex} 
+                        onChange={(e) => setTimeSliderIndex(parseInt(e.target.value))} 
+                      />
+                      <div className="time-label">{timeOptions[timeSliderIndex]}</div>
+                    </div>
                   </div>
 
                   <div className="control-group">
@@ -505,7 +666,7 @@ export default function App() {
                   <div className="control-group">
                     <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
                       <input type="checkbox" checked={allowApproximations} onChange={e => setAllowApproximations(e.target.checked)} />
-                      Allow Proxy Estimation / Fallback Math (Enable for Counterfactuals)
+                      Allow Proxy Estimation / Fallback Bootstrapping (Enable for missing data)
                     </label>
                   </div>
 
@@ -560,7 +721,7 @@ export default function App() {
                   )}
 
                   <div className="map-overlay" style={{ top: !liveCalculation ? '64px' : '16px' }}>
-                    <strong>Highest Score Highlighted: {maxScore > 0 ? maxScore : '...'}</strong>
+                    <strong>Highest Score Highlighted: {maxScore !== Number.NEGATIVE_INFINITY ? maxScore : '...'}</strong>
                     {activeLayers.map((layer, i) => <div key={i} style={{color: '#0b57d0', fontSize: '13px', marginTop: '4px'}}>{layer}</div>)}
                     <div style={{marginTop: '8px', color: '#444746'}}>
                       {heatmapMode ? 'Showing Canvas-Rendered Gradient Heatmap.' : 'Showing Precise Plot Marker Points.'}<br/>
@@ -569,9 +730,9 @@ export default function App() {
                   </div>
 
                   {selectedLocation && (
-                    <div className="evaluation-panel" style={{ width: '380px', maxHeight: '90%', overflowY: 'auto' }}>
+                    <div className="evaluation-panel" style={{ width: '420px', maxHeight: '90%', overflowY: 'auto' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                        <h3 style={{ margin: 0 }}>📍 Enterprise Location Eval</h3>
+                        <h3 style={{ margin: 0 }}>Enterprise Location Eval</h3>
                         <button onClick={() => setSelectedLocation(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '18px' }}>✖</button>
                       </div>
                       
@@ -579,63 +740,198 @@ export default function App() {
                         <p style={{fontSize: '14px', color: '#444746'}}>Running database queries on coordinates...</p>
                       ) : locationEval ? (
                         <>
-                          <div className="eval-metric">
-                            <span>Area Foot Traffic:</span>
-                            <span>{locationEval.footTraffic ?? 'Strict NULL'} {locationEval.isApproximated ? '(Proxy)' : ''}</span>
-                          </div>
-                          <div className="eval-metric">
-                            <span>Direct Competitors:</span>
-                            <span style={{ color: '#b2182b', fontWeight: 'bold' }}>{locationEval.nearbyCompetitors}</span>
-                          </div>
-                          <div className="eval-metric">
-                            <span>Supportive / Related Biz:</span>
-                            <span style={{ color: '#0f9d58', fontWeight: 'bold' }}>{locationEval.supportiveBusinesses}</span>
+                          <div className="eval-header-top">
+                             <div className="eval-score-circle" style={{backgroundColor: getHeatmapColor(locationEval.opportunityScore)}}>
+                                {locationEval.opportunityScore.toFixed(1)}
+                             </div>
+                             <div className="eval-header-info">
+                                <h3>Opportunity Score</h3>
+                                <p>{locationEval.resolvedAddress || `${locationEval.lat.toFixed(4)}, ${locationEval.lng.toFixed(4)}`}</p>
+                             </div>
                           </div>
                           
-                          <h4 style={{ margin: '12px 0 8px 0', fontSize: '13px', color: '#444746' }}>Demographics & Indicators</h4>
-                          <div className="eval-metric" style={{ fontSize: '13px' }}>
-                            <span>Income Level (Est):</span>
-                            <span>{locationEval.demographics.incomeLevel ? `$${locationEval.demographics.incomeLevel.toLocaleString()}` : 'N/A'}</span>
-                          </div>
-                          <div className="eval-metric" style={{ fontSize: '13px' }}>
-                            <span>Gentrification Index:</span>
-                            <span style={{ color: locationEval.demographics.gentrificationIndicator && locationEval.demographics.gentrificationIndicator > 0 ? '#0f9d58' : 'inherit' }}>
-                              {locationEval.demographics.gentrificationIndicator ? `+${locationEval.demographics.gentrificationIndicator.toFixed(1)}%` : 'N/A'}
-                            </span>
-                          </div>
-                          <div className="eval-metric" style={{ fontSize: '13px' }}>
-                            <span>Population Growth:</span>
-                            <span>{locationEval.demographics.targetPopulationGrowth ? `+${locationEval.demographics.targetPopulationGrowth.toFixed(1)}%` : 'N/A'}</span>
-                          </div>
-                          <div className="eval-metric" style={{ fontSize: '13px' }}>
-                            <span>USDA Food Desert:</span>
-                            <span>{locationEval.demographics.foodDesertStatus ? 'Yes (System Aware)' : 'No'}</span>
+                          {locationEval.assumptions && locationEval.assumptions.length > 0 && (
+                            <div className="accordion-section" style={{ backgroundColor: '#fce8e6', borderColor: '#f28b82' }}>
+                              <div className="accordion-header" onClick={() => toggleSection('assumptions')} style={{ color: '#b2182b' }}>
+                                 <h4>Missing Data({locationEval.assumptions.length})</h4>
+                                 <span>{expandedSections['assumptions'] ? '▲' : '▼'}</span>
+                              </div>
+                              {expandedSections['assumptions'] && (
+                                <div className="accordion-content">
+                                    <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '11px', color: '#444746', lineHeight: '1.4' }}>
+                                        {locationEval.assumptions.map((assump, idx) => (
+                                            <li key={idx} style={{ marginBottom: '4px', position: 'relative' }} className="assumption-item">
+                                              {assump}
+                                              <span className="tooltip-icon" title={getRecommendationForAssumption(assump)}> (?)</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                    <div style={{ marginTop: '12px', borderTop: '1px dashed #f28b82', paddingTop: '12px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => toggleSection('overrides')}>
+                                           <h4 style={{ margin: '0 0 8px 0', fontSize: '12px', color: '#b2182b' }}>Provide Manual Data Overrides</h4>
+                                           <span style={{ fontSize: '12px', color: '#b2182b' }}>{expandedSections['overrides'] ? '▲' : '▼'}</span>
+                                        </div>
+                                        {expandedSections['overrides'] && (
+                                          <>
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                                              <div>
+                                                <label style={{ fontSize: '10px', color: '#444' }}>Rent ($/sqft/yr)</label>
+                                                <input type="number" className="control-input" style={{ padding: '4px', fontSize: '11px' }} value={overrides.rent || ''} onChange={e => handleOverrideChange('rent', e.target.value)} placeholder="e.g. 35" />
+                                              </div>
+                                              <div>
+                                                <label style={{ fontSize: '10px', color: '#444' }}>Foot Traffic</label>
+                                                <input type="number" className="control-input" style={{ padding: '4px', fontSize: '11px' }} value={overrides.footTraffic || ''} onChange={e => handleOverrideChange('footTraffic', e.target.value)} placeholder="e.g. 5000" />
+                                              </div>
+                                              <div>
+                                                <label style={{ fontSize: '10px', color: '#444' }}>Labor Cost (%)</label>
+                                                <input type="number" className="control-input" style={{ padding: '4px', fontSize: '11px' }} value={overrides.laborCostPct || ''} onChange={e => handleOverrideChange('laborCostPct', e.target.value)} placeholder="e.g. 30" />
+                                              </div>
+                                              <div>
+                                                <label style={{ fontSize: '10px', color: '#444' }}>Startup Cost ($)</label>
+                                                <input type="number" className="control-input" style={{ padding: '4px', fontSize: '11px' }} value={overrides.startupCosts || ''} onChange={e => handleOverrideChange('startupCosts', e.target.value)} placeholder="e.g. 150000" />
+                                              </div>
+                                              <div>
+                                                <label style={{ fontSize: '10px', color: '#444' }}>Income Level ($)</label>
+                                                <input type="number" className="control-input" style={{ padding: '4px', fontSize: '11px' }} value={overrides.incomeLevel || ''} onChange={e => handleOverrideChange('incomeLevel', e.target.value)} placeholder="e.g. 80000" />
+                                              </div>
+                                              <div>
+                                                <label style={{ fontSize: '10px', color: '#444' }}>Daytime Pop.</label>
+                                                <input type="number" className="control-input" style={{ padding: '4px', fontSize: '11px' }} value={overrides.daytimePop || ''} onChange={e => handleOverrideChange('daytimePop', e.target.value)} placeholder="e.g. 12000" />
+                                              </div>
+                                            </div>
+                                            <button 
+                                              className="primary-btn" 
+                                              style={{ padding: '4px 12px', marginTop: '8px', fontSize: '11px', backgroundColor: '#b2182b' }}
+                                              onClick={() => triggerEvaluation(selectedLocation.lat, selectedLocation.lng, undefined, true)}
+                                            >
+                                              Apply Overrides & Recalculate
+                                            </button>
+                                          </>
+                                        )}
+                                    </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="accordion-section">
+                            <div className="accordion-header" onClick={() => toggleSection('trace')}>
+                               <h4>Calculation Trace</h4>
+                               <span>{expandedSections['trace'] ? '▲' : '▼'}</span>
+                            </div>
+                            {expandedSections['trace'] && (
+                              <div className="accordion-content">
+                                {locationEval.calcBreakdown.map((item, i) => (
+                                    <div key={i} className={`breakdown-row ${item.impact.toLowerCase()}`}>
+                                        <div className="bd-name">
+                                            <strong>{item.name}</strong>
+                                            <span className="bd-sub">Raw Value: {item.rawValue.toFixed(1)} | Applied Wt: {item.weight.toFixed(1)}</span>
+                                        </div>
+                                        <div className="bd-val">
+                                            {item.contribution > 0 ? '+' : ''}{item.contribution.toFixed(1)}
+                                        </div>
+                                    </div>
+                                ))}
+                                <div className="breakdown-row" style={{borderTop: '1px solid #e0e0e0', marginTop: '8px', paddingTop: '8px', backgroundColor: 'transparent'}}>
+                                    <div className="bd-name"><strong>Final Opportunity Score</strong></div>
+                                    <div className="bd-val" style={{fontSize: '16px', color: '#0b57d0'}}><strong>{locationEval.opportunityScore.toFixed(1)}</strong></div>
+                                </div>
+                              </div>
+                            )}
                           </div>
 
-                          <h4 style={{ margin: '12px 0 8px 0', fontSize: '13px', color: '#444746' }}>Operating Cost Estimates (SBA Guidelines)</h4>
-                          <div className="eval-metric" style={{ fontSize: '13px' }}>
-                            <span>Rent Baseline (~sqft/yr):</span>
-                            <span>{locationEval.operatingCosts.estimatedRent ? `$${locationEval.operatingCosts.estimatedRent}` : 'Unknown'}</span>
-                          </div>
-                          <div className="eval-metric" style={{ fontSize: '13px' }}>
-                            <span>Est. Utilities (/mo):</span>
-                            <span>{locationEval.operatingCosts.estimatedUtilities ? `$${locationEval.operatingCosts.estimatedUtilities.toFixed(0)}` : 'Unknown'}</span>
-                          </div>
-                          <div className="eval-metric" style={{ fontSize: '13px' }}>
-                            <span>Est. Labor Load (% Rev):</span>
-                            <span>{locationEval.operatingCosts.laborCostPct ? `${locationEval.operatingCosts.laborCostPct}%` : 'Unknown'}</span>
+                          <div className="accordion-section">
+                            <div className="accordion-header" onClick={() => toggleSection('core')}>
+                               <h4>Core Zoning</h4>
+                               <span>{expandedSections['core'] ? '▲' : '▼'}</span>
+                            </div>
+                            {expandedSections['core'] && (
+                              <div className="accordion-content">
+                                <div className="eval-metric">
+                                  <span>Area Foot Traffic:</span>
+                                  <span>{locationEval.footTraffic ?? 'Strict NULL'} {locationEval.isApproximated ? '(Proxy)' : ''}</span>
+                                </div>
+                                <div className="eval-metric">
+                                  <span>Direct Competitors:</span>
+                                  <span style={{ color: '#b2182b', fontWeight: 'bold' }}>{locationEval.nearbyCompetitors}</span>
+                                </div>
+                                <div className="eval-metric">
+                                  <span>Supportive / Related Biz:</span>
+                                  <span style={{ color: '#0f9d58', fontWeight: 'bold' }}>{locationEval.supportiveBusinesses}</span>
+                                </div>
+                                <div className="eval-metric" style={{ fontSize: '13px', borderBottom: 'none' }}>
+                                  <span style={{ color: '#444746', fontStyle: 'italic' }}>Zone: {locationEval.demographicProfile}</span>
+                                </div>
+                              </div>
+                            )}
                           </div>
                           
-                          <div style={{ marginTop: '16px', padding: '8px', backgroundColor: '#f0f4f9', borderRadius: '8px', fontSize: '11px', fontFamily: 'monospace', color: '#041e49', wordBreak: 'break-all' }}>
-                            <strong>Calc Trace:</strong><br/>
-                            {locationEval.calcLog}
+                          <div className="accordion-section">
+                            <div className="accordion-header" onClick={() => toggleSection('demographics')}>
+                               <h4>Demographics & Indicators</h4>
+                               <span>{expandedSections['demographics'] ? '▲' : '▼'}</span>
+                            </div>
+                            {expandedSections['demographics'] && (
+                              <div className="accordion-content">
+                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                  <span>Income Level (Est):</span>
+                                  <span>{locationEval.demographics.incomeLevel ? `$${locationEval.demographics.incomeLevel.toLocaleString()}` : 'N/A'}</span>
+                                </div>
+                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                  <span>Daytime Pop (Est):</span>
+                                  <span>{locationEval.demographics.daytimePopulation ? Math.round(locationEval.demographics.daytimePopulation).toLocaleString() : 'N/A'}</span>
+                                </div>
+                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                  <span>Nighttime Pop (Est):</span>
+                                  <span>{locationEval.demographics.nighttimePopulation ? Math.round(locationEval.demographics.nighttimePopulation).toLocaleString() : 'N/A'}</span>
+                                </div>
+                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                  <span>Gentrification Index:</span>
+                                  <span style={{ color: locationEval.demographics.gentrificationIndicator && locationEval.demographics.gentrificationIndicator > 0 ? '#0f9d58' : 'inherit' }}>
+                                    {locationEval.demographics.gentrificationIndicator ? `+${locationEval.demographics.gentrificationIndicator.toFixed(1)}%` : 'N/A'}
+                                  </span>
+                                </div>
+                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                  <span>Population Growth:</span>
+                                  <span>{locationEval.demographics.targetPopulationGrowth ? `+${locationEval.demographics.targetPopulationGrowth.toFixed(1)}%` : 'N/A'}</span>
+                                </div>
+                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                  <span>USDA Food Desert:</span>
+                                  <span>{locationEval.demographics.foodDesertStatus ? 'Yes (System Aware)' : 'No'}</span>
+                                </div>
+                              </div>
+                            )}
                           </div>
 
-                          <div className="eval-metric" style={{marginTop: '16px', border: 'none', fontSize: '18px'}}>
-                            <span><strong>Opp. Score (0-100):</strong></span>
-                            <span style={{color: locationEval.opportunityScore > 70 ? '#0f9d58' : locationEval.opportunityScore < 30 ? '#444746' : '#db4437'}}>
-                              {locationEval.opportunityScore.toFixed(1)}
-                            </span>
+                          <div className="accordion-section">
+                            <div className="accordion-header" onClick={() => toggleSection('costs')}>
+                               <h4>Operating Cost Estimates</h4>
+                               <span>{expandedSections['costs'] ? '▲' : '▼'}</span>
+                            </div>
+                            {expandedSections['costs'] && (
+                              <div className="accordion-content">
+                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                  <span>Rent Baseline (~sqft/yr):</span>
+                                  <span>{locationEval.operatingCosts.estimatedRent ? `$${locationEval.operatingCosts.estimatedRent}` : 'Unknown'}</span>
+                                </div>
+                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                  <span>Est. Utilities (/mo):</span>
+                                  <span>{locationEval.operatingCosts.estimatedUtilities ? `$${locationEval.operatingCosts.estimatedUtilities.toFixed(0)}` : 'Unknown'}</span>
+                                </div>
+                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                  <span>Est. Labor Load (% Rev):</span>
+                                  <span>{locationEval.operatingCosts.laborCostPct ? `${locationEval.operatingCosts.laborCostPct}%` : 'Unknown'}</span>
+                                </div>
+                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                  <span>Est. Startup Costs:</span>
+                                  <span>{locationEval.operatingCosts.startupCosts ? `$${locationEval.operatingCosts.startupCosts.toLocaleString()}` : 'Unknown'}</span>
+                                </div>
+                                <div className="eval-metric" style={{ fontSize: '13px', borderBottom: 'none' }}>
+                                  <span>Mktg Budget (% Rev):</span>
+                                  <span>{locationEval.operatingCosts.marketingPct ? `${locationEval.operatingCosts.marketingPct}%` : 'Unknown'}</span>
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </>
                       ) : null}
@@ -643,7 +939,7 @@ export default function App() {
                   )}
 
                   <MapContainer 
-                    center={[32.847, -117.273]} 
+                    center={selectedLocation ?[selectedLocation.lat, selectedLocation.lng] : [32.847, -117.273]} 
                     zoom={12} 
                     style={{ height: '100%', width: '100%', minHeight: '600px' }}
                     preferCanvas={true}
@@ -668,21 +964,22 @@ export default function App() {
                     ))}
 
                     {mapPoints.filter(p => p.type === 'opportunity').map((p, i) => {
-                      const isTopScore = p.score === maxScore && maxScore > 50;
+                      const isTopScore = p.score === maxScore && maxScore > 5;
+                      const isAllocated = p.name.includes('[Top Allocated Parcel]');
                       return (
                         <CircleMarker 
                           key={`opp-${i}`} 
                           center={[p.lat, p.lng]} 
-                          radius={heatmapMode ? (isTopScore ? 35 : 15 + (p.score / 5)) : (isTopScore ? 10 : 5)} 
+                          radius={heatmapMode ? (isAllocated ? 35 : Math.max(4, 15 + (p.score / 5))) : (isAllocated ? 10 : 5)} 
                           pathOptions={
                             heatmapMode 
-                              ? { stroke: isTopScore, color: isTopScore ? '#fbbc04' : undefined, weight: 3, fillColor: getHeatmapColor(p.score), fillOpacity: p.score < 30 ? 0.2 : 0.6 }
-                              : { stroke: true, color: isTopScore ? '#fbbc04' : '#1f1f1f', weight: isTopScore ? 3 : 1, fillColor: getHeatmapColor(p.score), fillOpacity: 0.9 }
+                              ? { stroke: isTopScore || isAllocated, color: isAllocated ? '#fbbc04' : undefined, weight: 3, fillColor: getHeatmapColor(p.score), fillOpacity: p.score < 5 ? 0.2 : 0.6 }
+                              : { stroke: true, color: isAllocated ? '#fbbc04' : '#1f1f1f', weight: isAllocated ? 3 : 1, fillColor: getHeatmapColor(p.score), fillOpacity: 0.9 }
                           }
                           eventHandlers={{ click: () => handleLocationSelect(p.lat, p.lng) }}
                         >
                            <Popup>
-                             <strong>{p.name} {isTopScore && "🌟 Highest Score"}</strong><br/>
+                             <strong>{p.name} {isAllocated && "🌟 Top System Pick"}</strong><br/>
                              Opportunity Score: {p.score}
                            </Popup>
                         </CircleMarker>
@@ -699,100 +996,102 @@ export default function App() {
                   </MapContainer>
                 </div>
 
-                <div className="agent-panel">
-                  <div className="agent-header">
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
-                      <div className="agent-icon">✨</div>
-                      A2A Data Agent
-                    </div>
-                    <button 
-                      onClick={() => setShowAgentSettings(!showAgentSettings)} 
-                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                      title="Agent LLM Settings"
-                    >
-                      ⚙️
-                    </button>
-                  </div>
-                  
-                  {showAgentSettings && (
-                    <div style={{ padding: '16px', background: '#f8f9fa', borderBottom: '1px solid #e0e0e0', zIndex: 10 }}>
-                      <h4 style={{ marginBottom: '12px', fontSize: '14px', color: '#1f1f1f' }}>LLM Configuration</h4>
-                      
-                      <div className="control-group" style={{ marginBottom: '12px' }}>
-                        <label>AI Provider</label>
-                        <select className="control-select" value={llmProvider} onChange={e => setLlmProvider(e.target.value)}>
-                          <option value="NRP">NRP AI Gateway (OpenAI Spec)</option>
-                          <option value="OpenAI">Custom OpenAI Endpoint</option>
-                          <option value="Gemini">Google Gemini (AI Studio)</option>
-                        </select>
+                {showAgentPanel && (
+                  <div className="agent-panel">
+                    <div className="agent-header">
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1 }}>
+                        <div className="agent-icon">✨</div>
+                        A2A Data Agent
                       </div>
-
-                      <div className="control-group" style={{ marginBottom: '12px' }}>
-                        <label>API Key / Bearer Token</label>
-                        <input 
-                          type="password" 
-                          value={llmApiKey} 
-                          onChange={e => setLlmApiKey(e.target.value)} 
-                          className="control-input" 
-                          placeholder={llmProvider === 'Gemini' ? "AIzaSy..." : "ey..."} 
-                        />
-                      </div>
-                      
-                      {llmProvider === 'OpenAI' && (
-                        <div className="control-group" style={{ marginBottom: '12px' }}>
-                          <label>Base URL Override</label>
-                          <input 
-                            type="text" 
-                            value={llmBaseUrl} 
-                            onChange={e => setLlmBaseUrl(e.target.value)} 
-                            className="control-input" 
-                            placeholder="https://api.openai.com/v1/chat/completions" 
-                          />
-                        </div>
-                      )}
-
-                      <div className="control-group" style={{ marginBottom: '16px' }}>
-                        <label>Model Engine</label>
-                        <input 
-                          type="text" 
-                          value={llmModel} 
-                          onChange={e => setLlmModel(e.target.value)} 
-                          className="control-input" 
-                          placeholder={llmProvider === 'Gemini' ? "gemini-1.5-pro" : "gpt-oss"} 
-                        />
-                      </div>
-                      
-                      <button onClick={() => setShowAgentSettings(false)} className="primary-btn" style={{ padding: '8px 16px', width: 'auto' }}>
-                        Save & Close
+                      <button 
+                        onClick={() => setShowAgentSettings(!showAgentSettings)} 
+                        style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                        title="Agent LLM Settings"
+                      >
+                        ⚙️
                       </button>
                     </div>
-                  )}
+                    
+                    {showAgentSettings && (
+                      <div style={{ padding: '16px', background: '#f8f9fa', borderBottom: '1px solid #e0e0e0', zIndex: 10 }}>
+                        <h4 style={{ marginBottom: '12px', fontSize: '14px', color: '#1f1f1f' }}>LLM Configuration</h4>
+                        
+                        <div className="control-group" style={{ marginBottom: '12px' }}>
+                          <label>AI Provider</label>
+                          <select className="control-select" value={llmProvider} onChange={e => setLlmProvider(e.target.value)}>
+                            <option value="NRP">NRP AI Gateway (OpenAI Spec)</option>
+                            <option value="OpenAI">Custom OpenAI Endpoint</option>
+                            <option value="Gemini">Google Gemini (AI Studio)</option>
+                          </select>
+                        </div>
 
-                  <div className="chat-messages">
-                    {messages.map((msg) => (
-                      <div key={msg.id} className={`message ${msg.sender}`}>
-                        {renderMessage(msg.text)}
-                      </div>
-                    ))}
-                    {isLoading && (
-                      <div className="message agent" style={{ color: '#747775', fontStyle: 'italic' }}>
-                        Agent is thinking and querying via {llmProvider}...
+                        <div className="control-group" style={{ marginBottom: '12px' }}>
+                          <label>API Key / Bearer Token</label>
+                          <input 
+                            type="password" 
+                            value={llmApiKey} 
+                            onChange={e => setLlmApiKey(e.target.value)} 
+                            className="control-input" 
+                            placeholder={llmProvider === 'Gemini' ? "AIzaSy..." : "ey..."} 
+                          />
+                        </div>
+                        
+                        {llmProvider === 'OpenAI' && (
+                          <div className="control-group" style={{ marginBottom: '12px' }}>
+                            <label>Base URL Override</label>
+                            <input 
+                              type="text" 
+                              value={llmBaseUrl} 
+                              onChange={e => setLlmBaseUrl(e.target.value)} 
+                              className="control-input" 
+                              placeholder="https://api.openai.com/v1/chat/completions" 
+                            />
+                          </div>
+                        )}
+
+                        <div className="control-group" style={{ marginBottom: '16px' }}>
+                          <label>Model Engine</label>
+                          <input 
+                            type="text" 
+                            value={llmModel} 
+                            onChange={e => setLlmModel(e.target.value)} 
+                            className="control-input" 
+                            placeholder={llmProvider === 'Gemini' ? "gemini-1.5-pro" : "gpt-oss"} 
+                          />
+                        </div>
+                        
+                        <button onClick={() => setShowAgentSettings(false)} className="primary-btn" style={{ padding: '8px 16px', width: 'auto' }}>
+                          Save & Close
+                        </button>
                       </div>
                     )}
+
+                    <div className="chat-messages">
+                      {messages.map((msg) => (
+                        <div key={msg.id} className={`message ${msg.sender}`}>
+                          {renderMessage(msg.text)}
+                        </div>
+                      ))}
+                      {isLoading && (
+                        <div className="message agent" style={{ color: '#747775', fontStyle: 'italic' }}>
+                          Agent is thinking and querying via {llmProvider}...
+                        </div>
+                      )}
+                    </div>
+                    <div className="chat-input-area">
+                      <textarea
+                        className="chat-input"
+                        rows={2}
+                        placeholder='Ask me a question...'
+                        value={inputValue}
+                        onChange={(e) => setInputValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }
+                        }}
+                      />
+                    </div>
                   </div>
-                  <div className="chat-input-area">
-                    <textarea
-                      className="chat-input"
-                      rows={2}
-                      placeholder='Ask me a question...'
-                      value={inputValue}
-                      onChange={(e) => setInputValue(e.target.value)}
-                      onKeyDown={(e) => {
-                        if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }
-                      }}
-                    />
-                  </div>
-                </div>
+                )}
               </>
             )}
 
@@ -801,13 +1100,33 @@ export default function App() {
                 <div className="manual-panel">
                   <h2 className="panel-title">Location Recommender</h2>
                   <p style={{ fontSize: '14px', color: '#444746', marginBottom: '16px', lineHeight: '1.6' }}>
-                    Click anywhere on the map to evaluate a specific point or neighborhood against our computational framework.
+                    Type an address or click anywhere on the map to evaluate a specific point or neighborhood against our computational framework.
                     It will automatically process all available business configurations (NAICS structures) and recommend the best fit based on market gaps, local competition, demographic bonuses, and land costs.
                   </p>
+
+                  <div className="control-group" style={{ marginBottom: '16px', padding: '12px', background: '#f8f9fa', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
+                    <h3 style={{ fontSize: '13px', marginBottom: '8px', color: '#1f1f1f' }}>Recommender Filters</h3>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', marginBottom: '6px' }}>
+                      <input type="checkbox" checked={recFilters.useFootTraffic} onChange={e => setRecFilters({...recFilters, useFootTraffic: e.target.checked})} />
+                      Consider Foot Traffic (Pedestrian Demand)
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', marginBottom: '6px' }}>
+                      <input type="checkbox" checked={recFilters.useCosts} onChange={e => setRecFilters({...recFilters, useCosts: e.target.checked})} />
+                      Consider Land/Operating Costs
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', marginBottom: '6px' }}>
+                      <input type="checkbox" checked={recFilters.useCompetitors} onChange={e => setRecFilters({...recFilters, useCompetitors: e.target.checked})} />
+                      Penalize High Competition Densities
+                    </label>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px' }}>
+                      <input type="checkbox" checked={recFilters.allowApproximations} onChange={e => setRecFilters({...recFilters, allowApproximations: e.target.checked})} />
+                      Allow Proxy Bootstrapping for Missing Data
+                    </label>
+                  </div>
                   
                   {selectedLocation && (
                     <div style={{ backgroundColor: '#f0f4f9', padding: '16px', borderRadius: '8px', border: '1px solid #d3e3fd' }}>
-                      <h3 style={{ fontSize: '14px', marginBottom: '12px', color: '#041e49' }}>📍 Selected Coordinates</h3>
+                      <h3 style={{ fontSize: '14px', marginBottom: '12px', color: '#041e49' }}>Selected Coordinates</h3>
                       <div style={{ fontSize: '13px', fontFamily: 'monospace', marginBottom: '16px' }}>
                         Lat: {selectedLocation.lat.toFixed(5)}<br/>
                         Lng: {selectedLocation.lng.toFixed(5)}
@@ -822,7 +1141,7 @@ export default function App() {
                             <div key={i} style={{ backgroundColor: 'white', padding: '12px', borderRadius: '6px', marginBottom: '8px', borderLeft: `4px solid ${i === 0 ? '#0f9d58' : '#0b57d0'}`, boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                                 <strong style={{ fontSize: '13px' }}>{rec.profile.name}</strong>
-                                <span style={{ fontWeight: 'bold', color: rec.score > 70 ? '#0f9d58' : '#1f1f1f' }}>{rec.score.toFixed(1)}</span>
+                                <span style={{ fontWeight: 'bold', color: rec.score > 25 ? '#0f9d58' : '#1f1f1f' }}>{rec.score.toFixed(1)}</span>
                               </div>
                               <div style={{ fontSize: '11px', color: '#747775' }}>NAICS Framework: {rec.profile.naics}</div>
                               <div style={{ fontSize: '11px', color: '#444746', marginTop: '6px', lineHeight: '1.4' }}>{rec.details}</div>
@@ -837,7 +1156,7 @@ export default function App() {
                 </div>
                 <div className="map-container" style={{ position: 'relative' }}>
                   <MapContainer 
-                    center={[32.847, -117.273]} 
+                    center={selectedLocation ?[selectedLocation.lat, selectedLocation.lng] : [32.847, -117.273]} 
                     zoom={12} 
                     style={{ height: '100%', width: '100%', minHeight: '600px' }}
                     preferCanvas={true}
@@ -917,4 +1236,3 @@ export default function App() {
     </>
   );
 }
-
