@@ -679,7 +679,7 @@ func (a *App) fetchDemographics(lat, lng float64, avgPrice float64, config Score
 		err := a.DB.QueryRow(`
 			SELECT is_food_desert_usda, is_low_income_low_access, food_insecurity_rate 
 			FROM nourish_cbg_food_environment 
-			ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
+			ORDER BY ST_Transform(geom, 4326) <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
 			LIMIT 1
 		`, lng, lat).Scan(&dbFoodDesert, &dbLILA, &dbFoodInsec)
 		if err == nil {
@@ -700,19 +700,39 @@ func (a *App) fetchDemographics(lat, lng float64, avgPrice float64, config Score
 		assumptions = append(assumptions, "Missing USDA Food Environment data for this coordinate. Assuming Not a Food Desert.")
 	}
 
-	// 2. Demographics
+	// 2. Demographics & Populations (Combined Query against bgs_sd_imp for ESRI Geoenrichment)
 	if config.Overrides.IncomeLevel != nil {
 		demo.IncomeLevel = config.Overrides.IncomeLevel
-	} else if a.DB != nil {
-		var inc, gent, pop sql.NullFloat64
+	}
+	if config.Overrides.DaytimePop != nil {
+		demo.DaytimePopulation = config.Overrides.DaytimePop
+	}
+	if config.Overrides.NighttimePop != nil {
+		demo.NighttimePopulation = config.Overrides.NighttimePop
+	}
+
+	if a.DB != nil && (demo.IncomeLevel == nil || demo.DaytimePopulation == nil || demo.NighttimePopulation == nil) {
+		var inc, gent, pop, totpop sql.NullFloat64
+
 		err := a.DB.QueryRow(`
-			SELECT median_income, gentrification_index, population_growth 
-			FROM nourish_cbg_demographics 
+			WITH ranked AS (
+				SELECT 
+					ST_Transform(e.geom, 4326) AS geom,
+					b.medhinc_cy,
+					b.totpop_cy,
+					((b.totpop_fy::numeric - b.totpop_cy::numeric) / NULLIF(b.totpop_cy::numeric, 0)) * 100.0 AS pop_growth,
+					(PERCENT_RANK() OVER(ORDER BY ((b.medval_fy::numeric - b.medval_cy::numeric)/NULLIF(b.medval_cy::numeric, 0)) + ((b.medhinc_fy::numeric - b.medhinc_cy::numeric)/NULLIF(b.medhinc_cy::numeric, 0))) * 100.0) AS gentrification_index
+				FROM bgs_sd_imp b
+				JOIN entity_blockgroup e ON b.ogc_fid = e.ogc_fid
+			)
+			SELECT medhinc_cy, gentrification_index, pop_growth, totpop_cy
+			FROM ranked 
 			ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
 			LIMIT 1
-		`, lng, lat).Scan(&inc, &gent, &pop)
+		`, lng, lat).Scan(&inc, &gent, &pop, &totpop)
+
 		if err == nil {
-			if inc.Valid {
+			if inc.Valid && demo.IncomeLevel == nil {
 				demo.IncomeLevel = &inc.Float64
 			}
 			if gent.Valid {
@@ -721,40 +741,63 @@ func (a *App) fetchDemographics(lat, lng float64, avgPrice float64, config Score
 			if pop.Valid {
 				demo.TargetPopulationGrowth = &pop.Float64
 			}
-		} else {
-			assumptions = append(assumptions, "Missing Demographics (Income, Gentrification, Pop Growth). Left as NULL.")
-		}
-	} else {
-		assumptions = append(assumptions, "Missing Demographics (Income, Gentrification, Pop Growth). Left as NULL.")
-	}
-
-	// 3. Population Time
-	if config.Overrides.DaytimePop != nil || config.Overrides.NighttimePop != nil {
-		demo.DaytimePopulation = config.Overrides.DaytimePop
-		demo.NighttimePopulation = config.Overrides.NighttimePop
-	} else if a.DB != nil {
-		var dp, np sql.NullFloat64
-		errPopTime := a.DB.QueryRow(`
-			SELECT metrics, counts 
-			FROM nourish_cbg_population_time 
-			ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
-			LIMIT 1
-		`, lng, lat).Scan(&dp, &np)
-		if errPopTime == nil {
-			if dp.Valid {
-				demo.DaytimePopulation = &dp.Float64
+			if totpop.Valid && demo.DaytimePopulation == nil {
+				demo.DaytimePopulation = &totpop.Float64
 			}
-			if np.Valid {
-				demo.NighttimePopulation = &np.Float64
+			if totpop.Valid && demo.NighttimePopulation == nil {
+				demo.NighttimePopulation = &totpop.Float64
 			}
 		} else {
-			assumptions = append(assumptions, "Missing Daytime/Nighttime Population data. Left as NULL.")
+			log.Printf("ESRI Demographics query failed: %v", err)
+
+			// Legacy Fallbacks
+			var legacyInc, legacyGent, legacyPop sql.NullFloat64
+			err2 := a.DB.QueryRow(`
+				SELECT median_income, gentrification_index, population_growth 
+				FROM nourish_cbg_demographics 
+				ORDER BY ST_Transform(geom, 4326) <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
+				LIMIT 1
+			`, lng, lat).Scan(&legacyInc, &legacyGent, &legacyPop)
+
+			if err2 == nil {
+				if legacyInc.Valid && demo.IncomeLevel == nil {
+					demo.IncomeLevel = &legacyInc.Float64
+				}
+				if legacyGent.Valid {
+					demo.GentrificationIndicator = &legacyGent.Float64
+				}
+				if legacyPop.Valid {
+					demo.TargetPopulationGrowth = &legacyPop.Float64
+				}
+			} else {
+				assumptions = append(assumptions, "Missing core demographics (Income, Gentrification, Pop Growth). Left as NULL.")
+			}
+
+			if demo.DaytimePopulation == nil || demo.NighttimePopulation == nil {
+				var dp, np sql.NullFloat64
+				errPopTime := a.DB.QueryRow(`
+					SELECT metrics, counts 
+					FROM nourish_cbg_population_time 
+					ORDER BY ST_Transform(geom, 4326) <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
+					LIMIT 1
+				`, lng, lat).Scan(&dp, &np)
+				if errPopTime == nil {
+					if dp.Valid && demo.DaytimePopulation == nil {
+						demo.DaytimePopulation = &dp.Float64
+					}
+					if np.Valid && demo.NighttimePopulation == nil {
+						demo.NighttimePopulation = &np.Float64
+					}
+				} else {
+					assumptions = append(assumptions, "Missing Daytime/Nighttime Population data. Left as NULL.")
+				}
+			}
 		}
-	} else {
-		assumptions = append(assumptions, "Missing Daytime/Nighttime Population data. Left as NULL.")
+	} else if a.DB == nil {
+		assumptions = append(assumptions, "Missing Demographics (Income, Gentrification, Pop Growth). Database disconnected.")
 	}
 
-	// 4. Rent Override check
+	// 3. Rent Override check
 	if config.Overrides.Rent != nil {
 		costs.EstimatedRent = config.Overrides.Rent
 		utilsDB := *config.Overrides.Rent * 0.15
@@ -762,11 +805,22 @@ func (a *App) fetchDemographics(lat, lng float64, avgPrice float64, config Score
 	} else if a.DB != nil {
 		var rentDB sql.NullFloat64
 		errRent := a.DB.QueryRow(`
-			SELECT avg_rent_cost
-			FROM esri_consumer_spending_data_
-			ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
+			SELECT b.medcrnt_cy
+			FROM bgs_sd_imp b
+			JOIN entity_blockgroup e ON b.ogc_fid = e.ogc_fid
+			ORDER BY ST_Transform(e.geom, 4326) <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
 			LIMIT 1
 		`, lng, lat).Scan(&rentDB)
+
+		if errRent != nil || !rentDB.Valid {
+			errRent = a.DB.QueryRow(`
+				SELECT avg_rent_cost
+				FROM esri_consumer_spending_data_
+				ORDER BY ST_Transform(geom, 4326) <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
+				LIMIT 1
+			`, lng, lat).Scan(&rentDB)
+		}
+
 		if errRent == nil && rentDB.Valid {
 			costs.EstimatedRent = &rentDB.Float64
 			utilsDB := rentDB.Float64 * 0.15
@@ -777,15 +831,19 @@ func (a *App) fetchDemographics(lat, lng float64, avgPrice float64, config Score
 				fallbackRent = 45.0
 			}
 			costs.EstimatedRent = &fallbackRent
+			utilsDB := fallbackRent * 0.15
+			costs.EstimatedUtilities = &utilsDB
 			assumptions = append(assumptions, "Missing local rent spatial data. Used SBA proxy mapping based on competitor price tiers.")
 		}
 	} else {
 		fallbackRent := 25.0
 		costs.EstimatedRent = &fallbackRent
+		utilsDB := fallbackRent * 0.15
+		costs.EstimatedUtilities = &utilsDB
 		assumptions = append(assumptions, "Missing local rent spatial data. Used SBA proxy mapping based on competitor price tiers.")
 	}
 
-	// 5. Labor Override check
+	// 4. Labor Override check
 	if config.Overrides.LaborCostPct != nil {
 		costs.LaborCostPct = config.Overrides.LaborCostPct
 	} else if a.DB != nil {
@@ -804,7 +862,7 @@ func (a *App) fetchDemographics(lat, lng float64, avgPrice float64, config Score
 		assumptions = append(assumptions, "Missing reference economics. Applied SBA labor benchmark (32.5%).")
 	}
 
-	// 6. Startup/Marketing Overrides
+	// 5. Startup/Marketing Overrides
 	if config.Overrides.StartupCosts != nil {
 		costs.StartupCosts = config.Overrides.StartupCosts
 	} else {
@@ -969,9 +1027,9 @@ func (a *App) calculateOpportunityScore(lat, lng float64, config ScoreConfig) (i
 	if a.DB != nil {
 		var dist sql.NullFloat64
 		err := a.DB.QueryRow(`
-			SELECT ST_Distance(geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography)
-			FROM sandag_layer_roads
-			ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC LIMIT 1
+			SELECT ST_Distance(ST_Transform(geom, 4326)::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography)
+			FROM sd_roads
+			ORDER BY ST_Transform(geom, 4326) <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC LIMIT 1
 		`, lng, lat).Scan(&dist)
 		if err == nil && dist.Valid {
 			distToRoadMeters = dist.Float64
@@ -1269,7 +1327,7 @@ func (a *App) handleEvaluateLocation(w http.ResponseWriter, r *http.Request) {
 		errZone := a.DB.QueryRow(`
 			SELECT zone_name
 			FROM sandag_layer_zoning_base_sd_new
-			ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
+			ORDER BY ST_Transform(geom, 4326) <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
 			LIMIT 1
 		`, req.Lng, req.Lat).Scan(&zoneName)
 		if errZone == nil {
@@ -1289,7 +1347,7 @@ func (a *App) handleEvaluateLocation(w http.ResponseWriter, r *http.Request) {
 		errRetail := a.DB.QueryRow(`
             SELECT raw_visit_counts 
             FROM pass_by_retail_store_foot_traffic_yelp_category 
-            ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
+            ORDER BY ST_Transform(geom, 4326) <-> ST_SetSRID(ST_MakePoint($1, $2), 4326) ASC
             LIMIT 1`).Scan(&retailVisits)
 		if errRetail == nil {
 			resp.FootTraffic = &retailVisits
@@ -1343,11 +1401,11 @@ func (a *App) getRealOpportunities(latStart, latEnd, lngStart, lngEnd float64, c
 	if a.DB != nil {
 		dbStatus = "Connected"
 		query := `
-			SELECT ST_Y(ST_Centroid(geom)), ST_X(ST_Centroid(geom)), zone_name
+			SELECT ST_Y(ST_Transform(ST_Centroid(geom), 4326)), ST_X(ST_Transform(ST_Centroid(geom), 4326)), zone_name
 			FROM sandag_layer_zoning_base_sd_new
 			WHERE (zone_name ILIKE '%Commercial%' OR zone_name ILIKE '%Mixed%' OR $5 = true)
-			  AND ST_Y(ST_Centroid(geom)) BETWEEN $1 AND $2
-			  AND ST_X(ST_Centroid(geom)) BETWEEN $3 AND $4
+			  AND ST_Y(ST_Transform(ST_Centroid(geom), 4326)) BETWEEN $1 AND $2
+			  AND ST_X(ST_Transform(ST_Centroid(geom), 4326)) BETWEEN $3 AND $4
 			LIMIT 300;
 		`
 		allowResidential := false
