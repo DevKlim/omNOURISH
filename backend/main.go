@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/csv"
@@ -24,6 +25,8 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	_ "github.com/lib/pq"
+	"golang.ngrok.com/ngrok"
+	"golang.ngrok.com/ngrok/config"
 )
 
 type App struct {
@@ -31,11 +34,15 @@ type App struct {
 }
 
 type ChatRequest struct {
-	Message  string `json:"message"`
-	ApiKey   string `json:"apiKey"`
-	Model    string `json:"model"`
-	Provider string `json:"provider"`
-	BaseUrl  string `json:"baseUrl"`
+	Message  string  `json:"message"`
+	ApiKey   string  `json:"apiKey"`
+	Model    string  `json:"model"`
+	Provider string  `json:"provider"`
+	BaseUrl  string  `json:"baseUrl"`
+	N        float64 `json:"n"`
+	S        float64 `json:"s"`
+	E        float64 `json:"e"`
+	W        float64 `json:"w"`
 }
 
 type MapPoint struct {
@@ -203,6 +210,10 @@ type EvalRequest struct {
 	Address             string         `json:"address"`
 	Lat                 float64        `json:"lat"`
 	Lng                 float64        `json:"lng"`
+	N                   float64        `json:"n"`
+	S                   float64        `json:"s"`
+	E                   float64        `json:"e"`
+	W                   float64        `json:"w"`
 	UseFootTraffic      bool           `json:"useFootTraffic"`
 	UseCosts            bool           `json:"useCosts"`
 	UseCompetitors      bool           `json:"useCompetitors"`
@@ -243,6 +254,18 @@ type BusinessRecommendation struct {
 	Profile BusinessConfig `json:"profile"`
 	Score   float64        `json:"score"`
 	Details string         `json:"details"`
+}
+
+type BestMatchResult struct {
+	Lat          float64          `json:"lat"`
+	Lng          float64          `json:"lng"`
+	Name         string           `json:"name"`
+	BusinessType string           `json:"businessType"`
+	BusinessName string           `json:"businessName"`
+	Score        int              `json:"score"`
+	StartupCosts float64          `json:"startupCosts"`
+	Rent         float64          `json:"rent"`
+	Breakdown    []ScoreComponent `json:"breakdown"`
 }
 
 var gmData []GMRecord
@@ -286,6 +309,7 @@ func main() {
 	r.Get("/api/business-profiles", app.handleBusinessProfiles)
 	r.Get("/api/recommend-business", app.handleRecommendBusiness)
 	r.Get("/api/opportunity-map", app.handleManualOpportunityMap)
+	r.Get("/api/find-best-match", app.handleFindBestMatch)
 
 	r.Get("/api/evaluate-location", app.handleEvaluateLocation)
 	r.Post("/api/evaluate-location", app.handleEvaluateLocation)
@@ -304,6 +328,26 @@ func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8081"
+	}
+
+	ngrokAuthToken := os.Getenv("NGROK_AUTHTOKEN")
+	if ngrokAuthToken != "" {
+		go func() {
+			ctx := context.Background()
+			tun, err := ngrok.Listen(ctx,
+				config.HTTPEndpoint(),
+				ngrok.WithAuthtoken(ngrokAuthToken),
+			)
+			if err != nil {
+				log.Printf("Warning: Failed to establish ngrok tunnel: %v", err)
+			} else {
+				log.Printf("ngrok tunnel established at: %s", tun.URL())
+				err = http.Serve(tun, r)
+				if err != nil {
+					log.Printf("ngrok server error: %v", err)
+				}
+			}
+		}()
 	}
 
 	log.Printf("Starting server on port %s...", port)
@@ -1181,6 +1225,17 @@ func parseFloatParam(r *http.Request, key string, defaultVal float64) float64 {
 	return val
 }
 
+func (a *App) findTopLocation(sBound, nBound, wBound, eBound float64, config ScoreConfig) (float64, float64, string) {
+	points, _, _, _ := a.getRealOpportunities(sBound, nBound, wBound, eBound, config)
+	if len(points) > 0 {
+		sort.Slice(points, func(i, j int) bool {
+			return points[i].Score > points[j].Score
+		})
+		return points[0].Lat, points[0].Lng, points[0].Name
+	}
+	return (nBound + sBound) / 2, (eBound + wBound) / 2, "Centroid (No top locations found)"
+}
+
 func (a *App) handleBusinessProfiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(BusinessProfiles)
@@ -1190,9 +1245,16 @@ func (a *App) handleRecommendBusiness(w http.ResponseWriter, r *http.Request) {
 	address := r.URL.Query().Get("address")
 	latStr := r.URL.Query().Get("lat")
 	lngStr := r.URL.Query().Get("lng")
+	nBound := parseFloatParam(r, "n", 0)
+	sBound := parseFloatParam(r, "s", 0)
+	eBound := parseFloatParam(r, "e", 0)
+	wBound := parseFloatParam(r, "w", 0)
 
 	lat, lng := 0.0, 0.0
-	if address != "" {
+	if nBound != 0 && sBound != 0 && latStr == "" && lngStr == "" && address == "" {
+		config := ScoreConfig{ComputationMethod: "standard"}
+		lat, lng, _ = a.findTopLocation(sBound, nBound, wBound, eBound, config)
+	} else if address != "" {
 		l, ln, err := geocodeAddress(address)
 		if err == nil {
 			lat, lng = l, ln
@@ -1260,6 +1322,10 @@ func (a *App) handleEvaluateLocation(w http.ResponseWriter, r *http.Request) {
 		req.Address = r.URL.Query().Get("address")
 		req.Lat, _ = strconv.ParseFloat(r.URL.Query().Get("lat"), 64)
 		req.Lng, _ = strconv.ParseFloat(r.URL.Query().Get("lng"), 64)
+		req.N, _ = strconv.ParseFloat(r.URL.Query().Get("n"), 64)
+		req.S, _ = strconv.ParseFloat(r.URL.Query().Get("s"), 64)
+		req.E, _ = strconv.ParseFloat(r.URL.Query().Get("e"), 64)
+		req.W, _ = strconv.ParseFloat(r.URL.Query().Get("w"), 64)
 		req.UseFootTraffic = r.URL.Query().Get("useFootTraffic") != "false"
 		req.UseCosts = r.URL.Query().Get("useCosts") != "false"
 		req.UseCompetitors = r.URL.Query().Get("useCompetitors") != "false"
@@ -1274,17 +1340,6 @@ func (a *App) handleEvaluateLocation(w http.ResponseWriter, r *http.Request) {
 		req.RatingW = parseFloatParam(r, "ratingW", 15.0)
 		req.FoodDesertW = parseFloatParam(r, "foodDesertW", 0.0)
 		req.GentrificationW = parseFloatParam(r, "gentrificationW", 0.0)
-	}
-
-	resolvedAddr := req.Address
-	if resolvedAddr != "" && req.Lat == 0 && req.Lng == 0 {
-		lat, lng, err := geocodeAddress(req.Address)
-		if err == nil {
-			req.Lat = lat
-			req.Lng = lng
-		}
-	} else if req.Lat != 0 && req.Lng != 0 && resolvedAddr == "" {
-		resolvedAddr = reverseGeocode(req.Lat, req.Lng)
 	}
 
 	config := ScoreConfig{
@@ -1303,6 +1358,22 @@ func (a *App) handleEvaluateLocation(w http.ResponseWriter, r *http.Request) {
 		FoodDesertBonus:      req.FoodDesertW,
 		GentrificationWeight: req.GentrificationW,
 		Overrides:            req.Overrides,
+	}
+
+	resolvedAddr := req.Address
+	if req.N != 0 && req.S != 0 && req.Lat == 0 && req.Lng == 0 {
+		req.Lat, req.Lng, resolvedAddr = a.findTopLocation(req.S, req.N, req.W, req.E, config)
+		if req.Address == "" && resolvedAddr != "" {
+			req.Address = resolvedAddr
+		}
+	} else if resolvedAddr != "" && req.Lat == 0 && req.Lng == 0 {
+		lat, lng, err := geocodeAddress(req.Address)
+		if err == nil {
+			req.Lat = lat
+			req.Lng = lng
+		}
+	} else if req.Lat != 0 && req.Lng != 0 && resolvedAddr == "" {
+		resolvedAddr = reverseGeocode(req.Lat, req.Lng)
 	}
 
 	score, _, totalReviews, calcCompCount, calcSuppCount, avgRating, popCount, resCount, breakdown, demo, costs, assumptions := a.calculateOpportunityScore(req.Lat, req.Lng, config)
@@ -1612,9 +1683,157 @@ func (a *App) handleManualOpportunityMap(w http.ResponseWriter, r *http.Request)
 	w.Write(payloadBytes)
 }
 
+func (a *App) handleFindBestMatch(w http.ResponseWriter, r *http.Request) {
+	budgetStr := r.URL.Query().Get("budget")
+	budget := 0.0
+	if budgetStr != "" {
+		budget, _ = strconv.ParseFloat(budgetStr, 64)
+	}
+
+	naics := r.URL.Query().Get("naics")
+	targetTime := r.URL.Query().Get("targetTime")
+
+	nBound, _ := strconv.ParseFloat(r.URL.Query().Get("n"), 64)
+	sBound, _ := strconv.ParseFloat(r.URL.Query().Get("s"), 64)
+	eBound, _ := strconv.ParseFloat(r.URL.Query().Get("e"), 64)
+	wBound, _ := strconv.ParseFloat(r.URL.Query().Get("w"), 64)
+
+	if nBound == 0 && sBound == 0 {
+		nBound, sBound, eBound, wBound = 32.95, 32.65, -116.95, -117.30
+	}
+
+	var profilesToCheck []BusinessConfig
+	if naics != "" && naics != "all" {
+		for _, p := range BusinessProfiles {
+			if p.NAICS == naics {
+				profilesToCheck = append(profilesToCheck, p)
+				break
+			}
+		}
+	} else {
+		profilesToCheck = BusinessProfiles
+	}
+
+	type Candidate struct {
+		Lat  float64
+		Lng  float64
+		Name string
+	}
+	var candidates []Candidate
+
+	if a.DB != nil {
+		query := `
+			SELECT ST_Y(ST_Transform(ST_Centroid(geom), 4326)), ST_X(ST_Transform(ST_Centroid(geom), 4326)), zone_name
+			FROM sandag_layer_zoning_base_sd_new
+			WHERE (zone_name ILIKE '%Commercial%' OR zone_name ILIKE '%Mixed%')
+			  AND ST_Y(ST_Transform(ST_Centroid(geom), 4326)) BETWEEN $1 AND $2
+			  AND ST_X(ST_Transform(ST_Centroid(geom), 4326)) BETWEEN $3 AND $4
+			LIMIT 100;
+		`
+		rows, err := a.DB.Query(query, sBound, nBound, wBound, eBound)
+		if err == nil {
+			defer rows.Close()
+			for rows.Next() {
+				var lat, lng float64
+				var name string
+				if err := rows.Scan(&lat, &lng, &name); err == nil {
+					candidates = append(candidates, Candidate{Lat: lat, Lng: lng, Name: name})
+				}
+			}
+		}
+	}
+
+	if len(candidates) == 0 {
+		for i, gm := range gmData {
+			if gm.Lat >= sBound && gm.Lat <= nBound && gm.Lng >= wBound && gm.Lng <= eBound {
+				if gm.Rating > 0 && gm.Rating < 4.0 && gm.ReviewCount > 10 {
+					candidates = append(candidates, Candidate{Lat: gm.Lat, Lng: gm.Lng, Name: gm.Title})
+					if len(candidates) >= 50 {
+						break
+					}
+				}
+			}
+			if i > 5000 {
+				break
+			}
+		}
+	}
+
+	var results []BestMatchResult
+
+	for _, cand := range candidates {
+		for _, prof := range profilesToCheck {
+			config := ScoreConfig{
+				UseFootTraffic:       true,
+				UseCosts:             true,
+				UseCompetitors:       true,
+				AllowApproximations:  true,
+				BusinessType:         prof.NAICS,
+				ComputationMethod:    "standard",
+				TargetTime:           targetTime,
+				TrafficWeight:        prof.TrafficWeight,
+				CompPenaltyWeight:    prof.CompPenaltyWeight,
+				SuppBonusWeight:      prof.SuppBonusWeight,
+				CostPenaltyWeight:    prof.CostPenaltyWeight,
+				RatingBonusWeight:    prof.RatingBonusWeight,
+				FoodDesertBonus:      prof.FoodDesertBonus,
+				GentrificationWeight: prof.GentrificationWeight,
+			}
+
+			score, _, _, _, _, _, _, _, breakdown, _, costs, _ := a.calculateOpportunityScore(cand.Lat, cand.Lng, config)
+
+			candStartup := 150000.0
+			if costs.StartupCosts != nil {
+				candStartup = *costs.StartupCosts
+			}
+
+			if budget > 0 && candStartup > budget {
+				continue
+			}
+
+			results = append(results, BestMatchResult{
+				Lat:          cand.Lat,
+				Lng:          cand.Lng,
+				Name:         cand.Name,
+				BusinessType: prof.NAICS,
+				BusinessName: prof.Name,
+				Score:        score,
+				StartupCosts: candStartup,
+				Rent: func() float64 {
+					if costs.EstimatedRent != nil {
+						return *costs.EstimatedRent
+					}
+					return 0
+				}(),
+				Breakdown: breakdown,
+			})
+		}
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Score > results[j].Score
+	})
+
+	if len(results) > 20 {
+		results = results[:20]
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(results)
+}
+
 func (a *App) handleGetDemographics(w http.ResponseWriter, r *http.Request) {
-	lat, _ := strconv.ParseFloat(r.URL.Query().Get("lat"), 64)
-	lng, _ := strconv.ParseFloat(r.URL.Query().Get("lng"), 64)
+	lat := parseFloatParam(r, "lat", 0)
+	lng := parseFloatParam(r, "lng", 0)
+	nBound := parseFloatParam(r, "n", 0)
+	sBound := parseFloatParam(r, "s", 0)
+	eBound := parseFloatParam(r, "e", 0)
+	wBound := parseFloatParam(r, "w", 0)
+
+	if nBound != 0 && sBound != 0 && lat == 0 && lng == 0 {
+		lat = (nBound + sBound) / 2.0
+		lng = (eBound + wBound) / 2.0
+	}
 
 	demo, _, _ := a.fetchDemographics(lat, lng, 0, ScoreConfig{})
 
@@ -1623,13 +1842,23 @@ func (a *App) handleGetDemographics(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleGetCompetitors(w http.ResponseWriter, r *http.Request) {
-	lat, _ := strconv.ParseFloat(r.URL.Query().Get("lat"), 64)
-	lng, _ := strconv.ParseFloat(r.URL.Query().Get("lng"), 64)
+	lat := parseFloatParam(r, "lat", 0)
+	lng := parseFloatParam(r, "lng", 0)
+	nBound := parseFloatParam(r, "n", 0)
+	sBound := parseFloatParam(r, "s", 0)
+	eBound := parseFloatParam(r, "e", 0)
+	wBound := parseFloatParam(r, "w", 0)
 	naics := r.URL.Query().Get("naics")
 
-	// Default radius rough approx for 1 mile
+	if nBound == 0 && sBound == 0 {
+		nBound = lat + 0.015
+		sBound = lat - 0.015
+		eBound = lng + 0.015
+		wBound = lng - 0.015
+	}
+
 	config := ScoreConfig{BusinessType: naics}
-	points := a.getDynamicCompetitors(lat-0.015, lat+0.015, lng-0.015, lng+0.015, config)
+	points := a.getDynamicCompetitors(sBound, nBound, wBound, eBound, config)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(points)
@@ -1753,8 +1982,13 @@ func (a *App) handleAgentChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	latStart, latEnd := 32.65, 32.95
-	lngStart, lngEnd := -117.30, -116.95
+	latStart, latEnd := req.S, req.N
+	lngStart, lngEnd := req.W, req.E
+
+	if latStart == 0 && latEnd == 0 {
+		latStart, latEnd = 32.65, 32.95
+		lngStart, lngEnd = -117.30, -116.95
+	}
 
 	replyText := a.callLLM(req.Message, req.ApiKey, req.Model, req.Provider, req.BaseUrl)
 	workspace := "LLM Analyzed View"
@@ -1867,6 +2101,10 @@ func (a *App) handleSwaggerJSON(w http.ResponseWriter, r *http.Request) {
         "parameters":[
           {"name": "lat", "in": "query", "schema": {"type": "number"}},
           {"name": "lng", "in": "query", "schema": {"type": "number"}},
+          {"name": "n", "in": "query", "schema": {"type": "number"}},
+          {"name": "s", "in": "query", "schema": {"type": "number"}},
+          {"name": "e", "in": "query", "schema": {"type": "number"}},
+          {"name": "w", "in": "query", "schema": {"type": "number"}},
           {"name": "address", "in": "query", "schema": {"type": "string"}},
           {"name": "naics", "in": "query", "schema": {"type": "string"}},
           {"name": "allowApproximations", "in": "query", "schema": {"type": "boolean"}}
@@ -1886,6 +2124,10 @@ func (a *App) handleSwaggerJSON(w http.ResponseWriter, r *http.Request) {
                       "address": {"type": "string"},
                       "lat": {"type": "number"},
                       "lng": {"type": "number"},
+                      "n": {"type": "number"},
+                      "s": {"type": "number"},
+                      "e": {"type": "number"},
+                      "w": {"type": "number"},
                       "overrides": {"type": "object"}
                    }
                 }
@@ -1901,8 +2143,12 @@ func (a *App) handleSwaggerJSON(w http.ResponseWriter, r *http.Request) {
       "get": {
         "summary": "Fetch raw demographics for specific point",
         "parameters":[
-          {"name": "lat", "in": "query", "required": true, "schema": {"type": "number"}},
-          {"name": "lng", "in": "query", "required": true, "schema": {"type": "number"}}
+          {"name": "lat", "in": "query", "schema": {"type": "number"}},
+          {"name": "lng", "in": "query", "schema": {"type": "number"}},
+          {"name": "n", "in": "query", "schema": {"type": "number"}},
+          {"name": "s", "in": "query", "schema": {"type": "number"}},
+          {"name": "e", "in": "query", "schema": {"type": "number"}},
+          {"name": "w", "in": "query", "schema": {"type": "number"}}
         ],
         "responses": {
           "200": { "description": "Returns JSON containing income, daytime/nighttime pop, etc." }
@@ -1913,8 +2159,12 @@ func (a *App) handleSwaggerJSON(w http.ResponseWriter, r *http.Request) {
       "get": {
         "summary": "List direct competitors within approx 1-mile bounds of lat/lng",
         "parameters":[
-          {"name": "lat", "in": "query", "required": true, "schema": {"type": "number"}},
-          {"name": "lng", "in": "query", "required": true, "schema": {"type": "number"}},
+          {"name": "lat", "in": "query", "schema": {"type": "number"}},
+          {"name": "lng", "in": "query", "schema": {"type": "number"}},
+          {"name": "n", "in": "query", "schema": {"type": "number"}},
+          {"name": "s", "in": "query", "schema": {"type": "number"}},
+          {"name": "e", "in": "query", "schema": {"type": "number"}},
+          {"name": "w", "in": "query", "schema": {"type": "number"}},
           {"name": "naics", "in": "query", "schema": {"type": "string"}}
         ],
         "responses": {
@@ -1928,10 +2178,31 @@ func (a *App) handleSwaggerJSON(w http.ResponseWriter, r *http.Request) {
         "parameters":[
           {"name": "address", "in": "query", "schema": {"type": "string"}},
           {"name": "lat", "in": "query", "schema": {"type": "number"}},
-          {"name": "lng", "in": "query", "schema": {"type": "number"}}
+          {"name": "lng", "in": "query", "schema": {"type": "number"}},
+          {"name": "n", "in": "query", "schema": {"type": "number"}},
+          {"name": "s", "in": "query", "schema": {"type": "number"}},
+          {"name": "e", "in": "query", "schema": {"type": "number"}},
+          {"name": "w", "in": "query", "schema": {"type": "number"}}
         ],
         "responses": {
           "200": { "description": "Returns a sorted array of business recommendations" }
+        }
+      }
+    },
+    "/api/find-best-match": {
+      "get": {
+        "summary": "Find the best business opportunities matching budget and constraints",
+        "parameters":[
+          {"name": "budget", "in": "query", "schema": {"type": "number"}},
+          {"name": "naics", "in": "query", "schema": {"type": "string"}},
+          {"name": "targetTime", "in": "query", "schema": {"type": "string"}},
+          {"name": "n", "in": "query", "schema": {"type": "number"}},
+          {"name": "s", "in": "query", "schema": {"type": "number"}},
+          {"name": "e", "in": "query", "schema": {"type": "number"}},
+          {"name": "w", "in": "query", "schema": {"type": "number"}}
+        ],
+        "responses": {
+          "200": { "description": "Returns a sorted array of best matching locations and business types" }
         }
       }
     }

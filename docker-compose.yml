@@ -9,6 +9,7 @@ services:
     environment:
       - PORT=8081
       - NRP_API_TOKEN=${NRP_API_TOKEN}
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
     volumes:
       - ./data:/data
 
@@ -19,4 +20,3 @@ services:
       - "8082:80"
     depends_on:
       - backend
-

@@ -106,31 +106,31 @@ const getRecommendationForAssumption = (text: string) => {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'home' | 'map' | 'recommend' | 'db_explorer'>('map');
+  const[activeTab, setActiveTab] = useState<'home' | 'map' | 'recommend' | 'finder' | 'db_explorer'>('map');
   const [activeWorkspace, setActiveWorkspace] = useState('General Food Business');
   const [messages, setMessages] = useState<Message[]>([
     { id: 1, sender: 'agent', text: 'Hello. I am the Nourish PT Data Agent backed by the AI Gateway. How can I help you find gaps in the market today?' }
   ]);
   const[inputValue, setInputValue] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [activeLayers, setActiveLayers] = useState<string[]>(['base_map']);
+  const[isLoading, setIsLoading] = useState(false);
+  const[activeLayers, setActiveLayers] = useState<string[]>(['base_map']);
   
   const[naicsFilter, setNaicsFilter] = useState('445');
   const[mapPoints, setMapPoints] = useState<MapData[]>([]);
-  const [debugInfo, setDebugInfo] = useState<any>(null);
-  const [businessProfiles, setBusinessProfiles] = useState<any[]>([]);
+  const[debugInfo, setDebugInfo] = useState<any>(null);
+  const[businessProfiles, setBusinessProfiles] = useState<any[]>([]);
 
   // General Config
-  const [allowApproximations, setAllowApproximations] = useState(true);
-  const [computationMethod, setComputationMethod] = useState('standard');
+  const[allowApproximations, setAllowApproximations] = useState(true);
+  const[computationMethod, setComputationMethod] = useState('standard');
   const[liveCalculation, setLiveCalculation] = useState(true);
-  const [showLiveWarning, setShowLiveWarning] = useState(false);
+  const[showLiveWarning, setShowLiveWarning] = useState(false);
   const searchHistoryRef = useRef<number[]>([]);
   const[addressInput, setAddressInput] = useState('');
   
   // Custom Scoring Profiles
   const [scoringProfile, setScoringProfile] = useState('standard');
-  const [customWeights, setCustomWeights] = useState({
+  const[customWeights, setCustomWeights] = useState({
     traffic: 1.0,
     compPenalty: 8.0,
     suppBonus: 1.5,
@@ -147,10 +147,10 @@ export default function App() {
 
   // Target Time Spatial Filters
   const timeOptions =["Any / All Day", "Early Morning (4am-9am)", "Midday (9am-2pm)", "Afternoon (2pm-6pm)", "Evening/Night (6pm-12am)"];
-  const [timeSliderIndex, setTimeSliderIndex] = useState(0);
+  const[timeSliderIndex, setTimeSliderIndex] = useState(0);
 
   // Agent Chat State (Hidden By Default)
-  const [showAgentPanel, setShowAgentPanel] = useState(false);
+  const[showAgentPanel, setShowAgentPanel] = useState(false);
 
   const [recFilters, setRecFilters] = useState({
     useFootTraffic: true,
@@ -159,8 +159,16 @@ export default function App() {
     allowApproximations: true
   });
 
+  // Finder Tab State
+  const [finderBudget, setFinderBudget] = useState<string>('');
+  const [finderNaics, setFinderNaics] = useState<string>('all');
+  const[finderTime, setFinderTime] = useState<number>(0);
+  const[finderResults, setFinderResults] = useState<any[]>([]);
+  const [isFinding, setIsFinding] = useState(false);
+  const [finderUseBounds, setFinderUseBounds] = useState(true);
+
   // Collapsible Evaluation Sections
-  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+  const[expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     assumptions: true,
     overrides: false,
     core: true,
@@ -204,14 +212,14 @@ export default function App() {
   };
 
   const handleOverrideChange = (field: keyof typeof overrides, value: string) => {
-    setOverrides(prev => ({...prev, [field]: value === '' ? null : parseFloat(value)}));
+    setOverrides(prev => ({...prev,[field]: value === '' ? null : parseFloat(value)}));
   };
 
   const[showAgentSettings, setShowAgentSettings] = useState(false);
-  const [llmProvider, setLlmProvider] = useState(localStorage.getItem('llm_provider') || 'NRP');
+  const[llmProvider, setLlmProvider] = useState(localStorage.getItem('llm_provider') || 'NRP');
   const[llmApiKey, setLlmApiKey] = useState(localStorage.getItem('llm_api_key') || '');
   const[llmModel, setLlmModel] = useState(localStorage.getItem('llm_model') || 'gpt-oss');
-  const [llmBaseUrl, setLlmBaseUrl] = useState(localStorage.getItem('llm_base_url') || '');
+  const[llmBaseUrl, setLlmBaseUrl] = useState(localStorage.getItem('llm_base_url') || '');
 
   useEffect(() => {
     localStorage.setItem('llm_provider', llmProvider);
@@ -220,21 +228,21 @@ export default function App() {
     localStorage.setItem('llm_base_url', llmBaseUrl);
   },[llmProvider, llmApiKey, llmModel, llmBaseUrl]);
 
-  const [heatmapMode, setHeatmapMode] = useState(true);
+  const[heatmapMode, setHeatmapMode] = useState(true);
 
-  const [mapBounds, setMapBounds] = useState<{n: number, s: number, e: number, w: number} | null>({
+  const[mapBounds, setMapBounds] = useState<{n: number, s: number, e: number, w: number} | null>({
     n: 32.95, s: 32.65, e: -116.95, w: -117.30
   });
   
   const [selectedLocation, setSelectedLocation] = useState<{lat: number, lng: number} | null>(null);
-  const [locationEval, setLocationEval] = useState<LocationEvalResponse | null>(null);
+  const[locationEval, setLocationEval] = useState<LocationEvalResponse | null>(null);
   const [isEvaluating, setIsEvaluating] = useState(false);
 
   const[recommendations, setRecommendations] = useState<any[]>([]);
   const[isRecommending, setIsRecommending] = useState(false);
 
-  const [exploreTable, setExploreTable] = useState('nourish_cbg_food_environment');
-  const [exploreResult, setExploreResult] = useState('');
+  const[exploreTable, setExploreTable] = useState('nourish_cbg_food_environment');
+  const[exploreResult, setExploreResult] = useState('');
 
   const quickTables =[
     "nourish_cbg_food_environment",
@@ -249,7 +257,7 @@ export default function App() {
     "2022_NAICS_Keywords"
   ];
 
-  const triggerEvaluation = async (lat: number | null, lng: number | null, address?: string, isOverrideSubmit: boolean = false) => {
+  const triggerEvaluation = async (lat: number | null, lng: number | null, address?: string, isOverrideSubmit: boolean = false, useBounds: boolean = false) => {
     if (activeTab === 'recommend') {
       setIsRecommending(true);
       setRecommendations([]);
@@ -257,6 +265,9 @@ export default function App() {
         let url = `http://localhost:8081/api/recommend-business?useFootTraffic=${recFilters.useFootTraffic}&useCosts=${recFilters.useCosts}&useCompetitors=${recFilters.useCompetitors}&allowApproximations=${recFilters.allowApproximations}&targetTime=${encodeURIComponent(timeOptions[timeSliderIndex])}`;
         if (address) url += `&address=${encodeURIComponent(address)}`;
         if (lat && lng) url += `&lat=${lat}&lng=${lng}`;
+        if (useBounds && mapBounds) {
+          url += `&n=${mapBounds.n}&s=${mapBounds.s}&e=${mapBounds.e}&w=${mapBounds.w}`;
+        }
 
         const response = await fetch(url);
         const data = await response.json();
@@ -280,6 +291,10 @@ export default function App() {
         const payload = {
           lat: lat || 0,
           lng: lng || 0,
+          n: (useBounds && mapBounds) ? mapBounds.n : 0,
+          s: (useBounds && mapBounds) ? mapBounds.s : 0,
+          e: (useBounds && mapBounds) ? mapBounds.e : 0,
+          w: (useBounds && mapBounds) ? mapBounds.w : 0,
           address: address || "",
           useFootTraffic: true,
           useCosts: true,
@@ -316,6 +331,31 @@ export default function App() {
     }
   };
 
+  const handleFindBestMatch = async () => {
+    setIsFinding(true);
+    setFinderResults([]);
+    try {
+        let url = `http://localhost:8081/api/find-best-match?targetTime=${encodeURIComponent(timeOptions[finderTime])}`;
+        if (finderBudget) {
+            url += `&budget=${finderBudget}`;
+        }
+        if (finderNaics !== 'all') {
+            url += `&naics=${finderNaics}`;
+        }
+        if (finderUseBounds && mapBounds) {
+            url += `&n=${mapBounds.n}&s=${mapBounds.s}&e=${mapBounds.e}&w=${mapBounds.w}`;
+        }
+        
+        const response = await fetch(url);
+        const data = await response.json();
+        setFinderResults(data ||[]);
+    } catch (e) {
+        console.error(e);
+    } finally {
+        setIsFinding(false);
+    }
+  };
+
   const handleLocationSelect = (lat: number, lng: number) => {
     setSelectedLocation({ lat, lng });
     triggerEvaluation(lat, lng);
@@ -330,7 +370,7 @@ export default function App() {
     if (!inputValue.trim()) return;
 
     const userMsg: Message = { id: Date.now(), sender: 'user', text: inputValue };
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) =>[...prev, userMsg]);
     setInputValue('');
     setIsLoading(true);
 
@@ -343,7 +383,11 @@ export default function App() {
           apiKey: llmApiKey,
           model: llmModel,
           provider: llmProvider,
-          baseUrl: llmBaseUrl
+          baseUrl: llmBaseUrl,
+          n: mapBounds?.n || 0,
+          s: mapBounds?.s || 0,
+          e: mapBounds?.e || 0,
+          w: mapBounds?.w || 0
         }),
       });
       const data = await response.json();
@@ -426,7 +470,7 @@ export default function App() {
         const lang = lines[0];
         const code = lines.slice(1).join('\n');
         return (
-          <pre key={index} style={{ backgroundColor: '#f0f4f9', color: '#1f1f1f', padding: '12px', borderRadius: '8px', overflowX: 'auto', marginTop: '8px', marginBottom: '8px', fontSize: '13px', fontFamily: 'monospace', border: '1px solid #e0e0e0' }}>
+          <pre key={index} style={{ backgroundColor: '#f1f3f4', color: '#202124', padding: '16px', borderRadius: '8px', overflowX: 'auto', marginTop: '12px', marginBottom: '12px', fontSize: '13px', fontFamily: 'monospace' }}>
             <code>{code || lang}</code>
           </pre>
         );
@@ -452,7 +496,7 @@ export default function App() {
     <>
       <header className="cloud-header">
         <div className="cloud-header-logo">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="#0b57d0">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
           </svg>
           Nourish PT
@@ -460,24 +504,25 @@ export default function App() {
         <div className="cloud-header-project">Live Food Business Opportunity Mapper</div>
         
         <div className="header-actions" style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-          {(activeTab === 'map' || activeTab === 'recommend') && (
-            <div style={{ display: 'flex', gap: '8px', maxWidth: '400px', width: '100%' }}>
+          {(activeTab === 'map' || activeTab === 'recommend' || activeTab === 'finder') && (
+            <div style={{ display: 'flex', gap: '12px', maxWidth: '440px', width: '100%' }}>
               <input 
                 type="text" 
                 className="control-input" 
+                style={{ padding: '10px 16px', borderRadius: '24px' }}
                 placeholder="Search an address or block group..." 
                 value={addressInput}
                 onChange={e => setAddressInput(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') handleAddressSearch(); }}
               />
-              <button className="primary-btn" style={{ width: 'auto', padding: '6px 16px' }} onClick={handleAddressSearch}>Find</button>
+              <button className="primary-btn" style={{ width: 'auto', padding: '10px 24px', borderRadius: '24px' }} onClick={handleAddressSearch}>Find</button>
             </div>
           )}
         </div>
         
         <div className="header-actions">
           <button className="icon-btn" onClick={() => setShowAgentPanel(!showAgentPanel)}>
-            {showAgentPanel ? '💬 Hide AI Agent' : '💬 Show AI Agent'}
+            {showAgentPanel ? 'Hide AI Agent' : 'Show AI Agent'}
           </button>
         </div>
       </header>
@@ -488,18 +533,25 @@ export default function App() {
           <div className={`sidebar-item ${activeTab === 'home' ? 'active' : ''}`} onClick={() => setActiveTab('home')}>Methodology & Home</div>
           <div className={`sidebar-item ${activeTab === 'map' ? 'active' : ''}`} onClick={() => setActiveTab('map')}>Opportunity Map (By Business)</div>
           <div className={`sidebar-item ${activeTab === 'recommend' ? 'active' : ''}`} onClick={() => setActiveTab('recommend')}>Location Recommender</div>
+          <div className={`sidebar-item ${activeTab === 'finder' ? 'active' : ''}`} onClick={() => setActiveTab('finder')}>Global Best Match Finder</div>
           <div className={`sidebar-item ${activeTab === 'db_explorer' ? 'active' : ''}`} onClick={() => setActiveTab('db_explorer')}>Database Explorer</div>
           
-          <div className="sidebar-header" style={{marginTop: '16px'}}>Integration API Docs</div>
-          <div className="sidebar-item" onClick={() => window.open('http://localhost:8081/swagger', '_blank')} style={{color: '#0b57d0'}}>
+          <div className="sidebar-header" style={{marginTop: '24px'}}>Integration API Docs</div>
+          <div className="sidebar-item" onClick={() => window.open('http://localhost:8081/swagger', '_blank')} style={{color: '#1a73e8'}}>
             Swagger / OpenAPI ↗
           </div>
 
-          <div className="sidebar-header" style={{marginTop: '16px'}}>Active Data Sources</div>
-          <div className="sidebar-item">ca_business (SD Tax + GM)</div>
-          <div className="sidebar-item">nourish_cbg_pedestrian_flow</div>
-          <div className="sidebar-item">nourish_cbg_food_environment</div>
-          <div className="sidebar-item">sandag_layer_zoning</div>
+          <div className="sidebar-header" style={{marginTop: '24px'}}>Active Data Sources</div>
+          <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>ca_business (SD Tax + GM)</div>
+          <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>2022_NAICS_Keywords</div>
+          <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>bgs_sd_imp (Demographics)</div>
+          <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>nourish_cbg_pedestrian_flow</div>
+          <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>nourish_cbg_food_environment</div>
+          <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>sandag_layer_zoning_base_sd_new</div>
+          <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>esri_consumer_spending_data_</div>
+          <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>nourish_ref_bakery_economics</div>
+          <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>sd_roads</div>
+          <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>pass_by_retail_store_foot_traffic</div>
         </aside>
 
         <main className="main-workspace">
@@ -508,6 +560,7 @@ export default function App() {
               {activeTab === 'home' && 'Methodology & Application Guide'}
               {activeTab === 'map' && `Opportunity Map | Active Context: ${activeWorkspace}`}
               {activeTab === 'recommend' && 'Location Recommender System'}
+              {activeTab === 'finder' && 'Global Best Match Finder'}
               {activeTab === 'db_explorer' && 'Database Schema Explorer'}
             </h1>
           </div>
@@ -578,8 +631,8 @@ export default function App() {
                   </div>
 
                   <div className="control-group">
-                    <label>Target Time of Day (Time-Spatial Focus)</label>
-                    <div className="slider-container" style={{ marginTop: '8px', padding: '4px' }}>
+                    <label>Target Time of Day</label>
+                    <div className="slider-container" style={{ marginTop: '12px' }}>
                       <input 
                         type="range" 
                         className="time-slider" 
@@ -599,55 +652,54 @@ export default function App() {
                       <option value="traffic_heavy">Prioritize Foot Traffic (Pedestrian Heavy)</option>
                       <option value="cost_averse">Cost Averse (Penalty for High Rent)</option>
                       <option value="offset_food_deserts">Community First (Offset Food Deserts)</option>
-                      <option value="custom">⚙️ Custom Math Profile</option>
+                      <option value="custom">Custom Math Profile</option>
                     </select>
                   </div>
 
                   {scoringProfile === 'custom' && (
-                    <div style={{ backgroundColor: '#f0f4f9', padding: '12px', borderRadius: '8px', marginBottom: '16px', border: '1px solid #d3e3fd' }}>
-                      <div className="control-group" style={{ marginBottom: '8px' }}>
-                        <label style={{ fontSize: '12px' }}>Traffic Positivity Weight</label>
+                    <div className="soft-box">
+                      <div className="control-group" style={{ marginBottom: '12px' }}>
+                        <label style={{ fontSize: '13px' }}>Traffic Positivity Weight</label>
                         <input type="number" step="0.5" className="control-input" value={customWeights.traffic} onChange={e => handleWeightChange('traffic', e.target.value)} />
                       </div>
-                      <div className="control-group" style={{ marginBottom: '8px' }}>
-                        <label style={{ fontSize: '12px' }}>Competitor Penalty Multiplier</label>
+                      <div className="control-group" style={{ marginBottom: '12px' }}>
+                        <label style={{ fontSize: '13px' }}>Competitor Penalty Multiplier</label>
                         <input type="number" step="0.5" className="control-input" value={customWeights.compPenalty} onChange={e => handleWeightChange('compPenalty', e.target.value)} />
                       </div>
-                      <div className="control-group" style={{ marginBottom: '8px' }}>
-                        <label style={{ fontSize: '12px' }}>Supportive Biz Bonus Mutliplier</label>
+                      <div className="control-group" style={{ marginBottom: '12px' }}>
+                        <label style={{ fontSize: '13px' }}>Supportive Biz Bonus Mutliplier</label>
                         <input type="number" step="0.5" className="control-input" value={customWeights.suppBonus} onChange={e => handleWeightChange('suppBonus', e.target.value)} />
                       </div>
-                      <div className="control-group" style={{ marginBottom: '8px' }}>
-                        <label style={{ fontSize: '12px' }}>Cost/Rent Penalty Multiplier</label>
+                      <div className="control-group" style={{ marginBottom: '12px' }}>
+                        <label style={{ fontSize: '13px' }}>Cost/Rent Penalty Multiplier</label>
                         <input type="number" step="0.5" className="control-input" value={customWeights.costPenalty} onChange={e => handleWeightChange('costPenalty', e.target.value)} />
                       </div>
-                      <div className="control-group" style={{ marginBottom: '8px' }}>
-                        <label style={{ fontSize: '12px' }}>Food Desert Offset Bonus</label>
+                      <div className="control-group" style={{ marginBottom: '12px' }}>
+                        <label style={{ fontSize: '13px' }}>Food Desert Offset Bonus</label>
                         <input type="number" step="0.5" className="control-input" value={customWeights.foodDesertBonus} onChange={e => handleWeightChange('foodDesertBonus', e.target.value)} />
                       </div>
-                      <div className="control-group" style={{ marginBottom: '8px' }}>
-                        <label style={{ fontSize: '12px' }}>Gentrification Weight (Income Proxy)</label>
+                      <div className="control-group" style={{ marginBottom: '12px' }}>
+                        <label style={{ fontSize: '13px' }}>Gentrification Weight (Income Proxy)</label>
                         <input type="number" step="0.5" className="control-input" value={customWeights.gentrificationWeight} onChange={e => handleWeightChange('gentrificationWeight', e.target.value)} />
                       </div>
                     </div>
                   )}
 
-                  <hr style={{margin: '16px 0', borderColor: '#e0e0e0'}} />
-
-                  <h2 className="panel-title">Data Filter Configuration</h2>
+                  <h2 className="panel-title" style={{ marginTop: '24px' }}>Data Filter Configuration</h2>
 
                   <div className="control-group">
-                    <label>Computation Method / Search Area Strategy</label>
+                    <label>Search Area Strategy</label>
                     <select className="control-select" value={computationMethod} onChange={e => setComputationMethod(e.target.value)}>
                       <option value="standard">Standard Local Allocation (Dense Focus)</option>
                       <option value="boutique">Boutique & Additive (Larger Trade Area)</option>
                     </select>
                   </div>
                   
-                  <div className="control-group" style={{ backgroundColor: showLiveWarning ? '#fce8e6' : 'transparent', padding: showLiveWarning ? '8px' : '0', borderRadius: '8px', transition: 'all 0.3s' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: showLiveWarning ? '#b2182b' : 'inherit' }}>
+                  <div className="control-group" style={{ padding: '8px 0', transition: 'all 0.3s' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', color: showLiveWarning ? '#a50e0e' : 'inherit' }}>
                       <input 
                         type="checkbox" 
+                        style={{ transform: 'scale(1.2)' }}
                         checked={liveCalculation} 
                         onChange={e => {
                           setLiveCalculation(e.target.checked);
@@ -657,32 +709,30 @@ export default function App() {
                       Enable Live Dynamic Calculations
                     </label>
                     {showLiveWarning && (
-                      <div style={{ fontSize: '12px', color: '#b2182b', marginTop: '6px' }}>
+                      <div className="alert-box" style={{ marginTop: '12px' }}>
                         ⚠️ Rapid calculations detected. Consider turning this off to limit heavy data processing while adjusting map bounds.
                       </div>
                     )}
                   </div>
 
                   <div className="control-group">
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
-                      <input type="checkbox" checked={allowApproximations} onChange={e => setAllowApproximations(e.target.checked)} />
+                    <label style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', cursor: 'pointer', lineHeight: '1.4' }}>
+                      <input type="checkbox" style={{ transform: 'scale(1.2)', marginTop: '4px' }} checked={allowApproximations} onChange={e => setAllowApproximations(e.target.checked)} />
                       Allow Proxy Estimation / Fallback Bootstrapping (Enable for missing data)
                     </label>
                   </div>
 
                   <div className="control-group">
                     <label>View Mode</label>
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                    <div style={{ display: 'flex', gap: '12px' }}>
                       <button 
                         className={`primary-btn ${heatmapMode ? '' : 'inactive-btn'}`} 
-                        style={{ padding: '6px 12px', flex: 1, backgroundColor: heatmapMode ? '#0b57d0' : '#e0e0e0', color: heatmapMode ? 'white' : '#444' }} 
                         onClick={() => setHeatmapMode(true)}
                       >
                         Gradient Heatmap
                       </button>
                       <button 
                         className={`primary-btn ${!heatmapMode ? '' : 'inactive-btn'}`} 
-                        style={{ padding: '6px 12px', flex: 1, backgroundColor: !heatmapMode ? '#0b57d0' : '#e0e0e0', color: !heatmapMode ? 'white' : '#444' }} 
                         onClick={() => setHeatmapMode(false)}
                       >
                         Strict Points
@@ -690,18 +740,17 @@ export default function App() {
                     </div>
                   </div>
 
-                  <hr style={{margin: '24px 0', borderColor: '#e0e0e0'}} />
-                  <h2 className="panel-title" style={{marginBottom: '16px'}}>⚙️ Calculation Logs</h2>
+                  <h2 className="panel-title" style={{marginTop: '24px', marginBottom: '16px'}}>Calculation Logs</h2>
                   {debugInfo ? (
-                    <div style={{fontSize: '13px', color: '#444746', lineHeight: '1.6'}}>
-                      <div><strong>DB Status:</strong> {debugInfo.dbStatus}</div>
-                      <div><strong>SQL Points (Zoning):</strong> {debugInfo.sqlPointsFound}</div>
-                      <div><strong>CSV Fallback (GM):</strong> {debugInfo.csvFallbackFound}</div>
-                      <div><strong>Competitors Found:</strong> {debugInfo.competitorsFound}</div>
-                      <div><strong>Total Map Nodes:</strong> {debugInfo.totalPoints}</div>
+                    <div className="soft-box" style={{fontSize: '14px', color: '#5f6368', lineHeight: '1.8', marginBottom: 0}}>
+                      <div><strong style={{color: '#202124'}}>DB Status:</strong> {debugInfo.dbStatus}</div>
+                      <div><strong style={{color: '#202124'}}>SQL Points:</strong> {debugInfo.sqlPointsFound}</div>
+                      <div><strong style={{color: '#202124'}}>CSV Fallback:</strong> {debugInfo.csvFallbackFound}</div>
+                      <div><strong style={{color: '#202124'}}>Competitors Found:</strong> {debugInfo.competitorsFound}</div>
+                      <div><strong style={{color: '#202124'}}>Total Map Nodes:</strong> {debugInfo.totalPoints}</div>
                     </div>
                   ) : (
-                    <div style={{fontSize: '13px', color: '#747775'}}>Waiting for map sync...</div>
+                    <div style={{fontSize: '14px', color: '#9aa0a6'}}>Waiting for map sync...</div>
                   )}
                 </div>
 
@@ -710,98 +759,104 @@ export default function App() {
                     <button 
                       onClick={handleManualSearch}
                       style={{
-                        position: 'absolute', top: 16, left: '50%', transform: 'translateX(-50%)',
-                        zIndex: 2000, padding: '10px 24px', backgroundColor: '#0b57d0', color: 'white',
-                        borderRadius: '24px', border: 'none', fontWeight: 500, cursor: 'pointer',
-                        boxShadow: '0 2px 6px rgba(0,0,0,0.3)'
+                        position: 'absolute', top: 24, left: '50%', transform: 'translateX(-50%)',
+                        zIndex: 2000, padding: '14px 28px', backgroundColor: '#1a73e8', color: 'white',
+                        borderRadius: '28px', border: 'none', fontWeight: 500, fontSize: '15px', cursor: 'pointer',
+                        boxShadow: '0 4px 12px rgba(0,0,0,0.2)'
                       }}
                     >
                       🔄 Run Calculation For Current Area
                     </button>
                   )}
 
-                  <div className="map-overlay" style={{ top: !liveCalculation ? '64px' : '16px' }}>
-                    <strong>Highest Score Highlighted: {maxScore !== Number.NEGATIVE_INFINITY ? maxScore : '...'}</strong>
-                    {activeLayers.map((layer, i) => <div key={i} style={{color: '#0b57d0', fontSize: '13px', marginTop: '4px'}}>{layer}</div>)}
-                    <div style={{marginTop: '8px', color: '#444746'}}>
+                  <div className="map-overlay" style={{ top: !liveCalculation ? '80px' : '24px' }}>
+                    <strong style={{color: '#202124', fontSize: '15px', display: 'block', marginBottom: '8px'}}>Highest Score Highlighted: {maxScore !== Number.NEGATIVE_INFINITY ? maxScore : '...'}</strong>
+                    {activeLayers.map((layer, i) => <div key={i} style={{color: '#1a73e8', marginBottom: '4px'}}>{layer}</div>)}
+                    <div style={{marginTop: '12px', color: '#5f6368', fontSize: '13px'}}>
                       {heatmapMode ? 'Showing Canvas-Rendered Gradient Heatmap.' : 'Showing Precise Plot Marker Points.'}<br/>
-                      <em>Tip: Click any marker to view real data & economics.</em>
+                      <em style={{display: 'inline-block', marginTop: '6px'}}>Tip: Click any marker to view real data & economics.</em>
                     </div>
                   </div>
 
                   {selectedLocation && (
-                    <div className="evaluation-panel" style={{ width: '420px', maxHeight: '90%', overflowY: 'auto' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    <div className="evaluation-panel">
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
                         <h3 style={{ margin: 0 }}>Enterprise Location Eval</h3>
-                        <button onClick={() => setSelectedLocation(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '18px' }}>✖</button>
+                        <button onClick={() => setSelectedLocation(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#5f6368' }}>✖</button>
                       </div>
                       
                       {isEvaluating ? (
-                        <p style={{fontSize: '14px', color: '#444746'}}>Running database queries on coordinates...</p>
+                        <div style={{ padding: '0 24px 24px 24px', fontSize: '14px', color: '#5f6368' }}>Running database queries on coordinates...</div>
                       ) : locationEval ? (
-                        <>
+                        <div style={{ maxHeight: 'calc(100vh - 180px)', overflowY: 'auto' }}>
                           <div className="eval-header-top">
-                             <div className="eval-score-circle" style={{backgroundColor: getHeatmapColor(locationEval.opportunityScore)}}>
+                             <div className="eval-score-text" style={{color: getHeatmapColor(locationEval.opportunityScore), fontSize: '32px', fontWeight: 'bold'}}>
                                 {locationEval.opportunityScore.toFixed(1)}
                              </div>
                              <div className="eval-header-info">
-                                <h3>Opportunity Score</h3>
+                                <h3 style={{fontSize: '16px', fontWeight: 500, color: '#202124'}}>Opportunity Score</h3>
                                 <p>{locationEval.resolvedAddress || `${locationEval.lat.toFixed(4)}, ${locationEval.lng.toFixed(4)}`}</p>
                              </div>
                           </div>
                           
                           {locationEval.assumptions && locationEval.assumptions.length > 0 && (
-                            <div className="accordion-section" style={{ backgroundColor: '#fce8e6', borderColor: '#f28b82' }}>
-                              <div className="accordion-header" onClick={() => toggleSection('assumptions')} style={{ color: '#b2182b' }}>
-                                 <h4>Missing Data({locationEval.assumptions.length})</h4>
+                            <div className="accordion-section" style={{ backgroundColor: '#fff', borderTop: '4px solid #fce8e6' }}>
+                              <div className="accordion-header" onClick={() => toggleSection('assumptions')} style={{ color: '#a50e0e' }}>
+                                 <h4 style={{ color: '#a50e0e' }}>Missing Data ({locationEval.assumptions.length})</h4>
                                  <span>{expandedSections['assumptions'] ? '▲' : '▼'}</span>
                               </div>
                               {expandedSections['assumptions'] && (
-                                <div className="accordion-content">
-                                    <ul style={{ margin: 0, paddingLeft: '16px', fontSize: '11px', color: '#444746', lineHeight: '1.4' }}>
+                                <div className="accordion-content" style={{ backgroundColor: '#fff' }}>
+                                    <ul style={{ margin: 0, paddingLeft: '20px', fontSize: '13px', color: '#5f6368', lineHeight: '1.6' }}>
                                         {locationEval.assumptions.map((assump, idx) => (
-                                            <li key={idx} style={{ marginBottom: '4px', position: 'relative' }} className="assumption-item">
+                                            <li key={idx} style={{ marginBottom: '8px' }} className="assumption-item">
                                               {assump}
                                               <span className="tooltip-icon" title={getRecommendationForAssumption(assump)}> (?)</span>
                                             </li>
                                         ))}
                                     </ul>
-                                    <div style={{ marginTop: '12px', borderTop: '1px dashed #f28b82', paddingTop: '12px' }}>
-                                        <div style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }} onClick={() => toggleSection('overrides')}>
-                                           <h4 style={{ margin: '0 0 8px 0', fontSize: '12px', color: '#b2182b' }}>Provide Manual Data Overrides</h4>
-                                           <span style={{ fontSize: '12px', color: '#b2182b' }}>{expandedSections['overrides'] ? '▲' : '▼'}</span>
+                                    <div style={{ marginTop: '20px', borderTop: '1px solid #f1f3f4', paddingTop: '20px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', cursor: 'pointer', marginBottom: '16px' }} onClick={() => toggleSection('overrides')}>
+                                           <h4 style={{ margin: 0, fontSize: '14px', color: '#202124', fontWeight: 500 }}>Provide Manual Data Overrides</h4>
+                                           <span style={{ fontSize: '12px', color: '#9aa0a6' }}>{expandedSections['overrides'] ? '▲' : '▼'}</span>
                                         </div>
                                         {expandedSections['overrides'] && (
                                           <>
-                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
-                                              <div>
-                                                <label style={{ fontSize: '10px', color: '#444' }}>Rent ($/sqft/yr)</label>
-                                                <input type="number" className="control-input" style={{ padding: '4px', fontSize: '11px' }} value={overrides.rent || ''} onChange={e => handleOverrideChange('rent', e.target.value)} placeholder="e.g. 35" />
+                                            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: '16px', marginBottom: '16px' }}>
+                                              <div style={{ display: 'flex', gap: '12px' }}>
+                                                <div style={{ flex: 1 }}>
+                                                  <label style={{ fontSize: '12px', color: '#5f6368', display: 'block', marginBottom: '6px' }}>Rent ($/sqft/yr)</label>
+                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.rent || ''} onChange={e => handleOverrideChange('rent', e.target.value)} placeholder="e.g. 35" />
+                                                </div>
+                                                <div style={{ flex: 1 }}>
+                                                  <label style={{ fontSize: '12px', color: '#5f6368', display: 'block', marginBottom: '6px' }}>Foot Traffic</label>
+                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.footTraffic || ''} onChange={e => handleOverrideChange('footTraffic', e.target.value)} placeholder="e.g. 5000" />
+                                                </div>
                                               </div>
-                                              <div>
-                                                <label style={{ fontSize: '10px', color: '#444' }}>Foot Traffic</label>
-                                                <input type="number" className="control-input" style={{ padding: '4px', fontSize: '11px' }} value={overrides.footTraffic || ''} onChange={e => handleOverrideChange('footTraffic', e.target.value)} placeholder="e.g. 5000" />
+                                              <div style={{ display: 'flex', gap: '12px' }}>
+                                                <div style={{ flex: 1 }}>
+                                                  <label style={{ fontSize: '12px', color: '#5f6368', display: 'block', marginBottom: '6px' }}>Labor Cost (%)</label>
+                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.laborCostPct || ''} onChange={e => handleOverrideChange('laborCostPct', e.target.value)} placeholder="e.g. 30" />
+                                                </div>
+                                                <div style={{ flex: 1 }}>
+                                                  <label style={{ fontSize: '12px', color: '#5f6368', display: 'block', marginBottom: '6px' }}>Startup Cost ($)</label>
+                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.startupCosts || ''} onChange={e => handleOverrideChange('startupCosts', e.target.value)} placeholder="e.g. 150000" />
+                                                </div>
                                               </div>
-                                              <div>
-                                                <label style={{ fontSize: '10px', color: '#444' }}>Labor Cost (%)</label>
-                                                <input type="number" className="control-input" style={{ padding: '4px', fontSize: '11px' }} value={overrides.laborCostPct || ''} onChange={e => handleOverrideChange('laborCostPct', e.target.value)} placeholder="e.g. 30" />
-                                              </div>
-                                              <div>
-                                                <label style={{ fontSize: '10px', color: '#444' }}>Startup Cost ($)</label>
-                                                <input type="number" className="control-input" style={{ padding: '4px', fontSize: '11px' }} value={overrides.startupCosts || ''} onChange={e => handleOverrideChange('startupCosts', e.target.value)} placeholder="e.g. 150000" />
-                                              </div>
-                                              <div>
-                                                <label style={{ fontSize: '10px', color: '#444' }}>Income Level ($)</label>
-                                                <input type="number" className="control-input" style={{ padding: '4px', fontSize: '11px' }} value={overrides.incomeLevel || ''} onChange={e => handleOverrideChange('incomeLevel', e.target.value)} placeholder="e.g. 80000" />
-                                              </div>
-                                              <div>
-                                                <label style={{ fontSize: '10px', color: '#444' }}>Daytime Pop.</label>
-                                                <input type="number" className="control-input" style={{ padding: '4px', fontSize: '11px' }} value={overrides.daytimePop || ''} onChange={e => handleOverrideChange('daytimePop', e.target.value)} placeholder="e.g. 12000" />
+                                              <div style={{ display: 'flex', gap: '12px' }}>
+                                                <div style={{ flex: 1 }}>
+                                                  <label style={{ fontSize: '12px', color: '#5f6368', display: 'block', marginBottom: '6px' }}>Income Level ($)</label>
+                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.incomeLevel || ''} onChange={e => handleOverrideChange('incomeLevel', e.target.value)} placeholder="e.g. 80000" />
+                                                </div>
+                                                <div style={{ flex: 1 }}>
+                                                  <label style={{ fontSize: '12px', color: '#5f6368', display: 'block', marginBottom: '6px' }}>Daytime Pop.</label>
+                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.daytimePop || ''} onChange={e => handleOverrideChange('daytimePop', e.target.value)} placeholder="e.g. 12000" />
+                                                </div>
                                               </div>
                                             </div>
                                             <button 
                                               className="primary-btn" 
-                                              style={{ padding: '4px 12px', marginTop: '8px', fontSize: '11px', backgroundColor: '#b2182b' }}
+                                              style={{ padding: '12px 16px' }}
                                               onClick={() => triggerEvaluation(selectedLocation.lat, selectedLocation.lng, undefined, true)}
                                             >
                                               Apply Overrides & Recalculate
@@ -832,9 +887,9 @@ export default function App() {
                                         </div>
                                     </div>
                                 ))}
-                                <div className="breakdown-row" style={{borderTop: '1px solid #e0e0e0', marginTop: '8px', paddingTop: '8px', backgroundColor: 'transparent'}}>
-                                    <div className="bd-name"><strong>Final Opportunity Score</strong></div>
-                                    <div className="bd-val" style={{fontSize: '16px', color: '#0b57d0'}}><strong>{locationEval.opportunityScore.toFixed(1)}</strong></div>
+                                <div className="breakdown-row" style={{borderTop: '1px solid #f1f3f4', marginTop: '16px', paddingTop: '16px', backgroundColor: 'transparent'}}>
+                                    <div className="bd-name"><strong style={{fontSize: '15px'}}>Final Opportunity Score</strong></div>
+                                    <div className="bd-val" style={{fontSize: '20px', color: '#1a73e8'}}><strong>{locationEval.opportunityScore.toFixed(1)}</strong></div>
                                 </div>
                               </div>
                             )}
@@ -842,7 +897,7 @@ export default function App() {
 
                           <div className="accordion-section">
                             <div className="accordion-header" onClick={() => toggleSection('core')}>
-                               <h4>Core Zoning</h4>
+                               <h4>Core Zoning Context</h4>
                                <span>{expandedSections['core'] ? '▲' : '▼'}</span>
                             </div>
                             {expandedSections['core'] && (
@@ -853,14 +908,14 @@ export default function App() {
                                 </div>
                                 <div className="eval-metric">
                                   <span>Direct Competitors:</span>
-                                  <span style={{ color: '#b2182b', fontWeight: 'bold' }}>{locationEval.nearbyCompetitors}</span>
+                                  <span style={{ color: '#a50e0e' }}>{locationEval.nearbyCompetitors}</span>
                                 </div>
                                 <div className="eval-metric">
                                   <span>Supportive / Related Biz:</span>
-                                  <span style={{ color: '#0f9d58', fontWeight: 'bold' }}>{locationEval.supportiveBusinesses}</span>
+                                  <span style={{ color: '#137333' }}>{locationEval.supportiveBusinesses}</span>
                                 </div>
-                                <div className="eval-metric" style={{ fontSize: '13px', borderBottom: 'none' }}>
-                                  <span style={{ color: '#444746', fontStyle: 'italic' }}>Zone: {locationEval.demographicProfile}</span>
+                                <div className="eval-metric" style={{ borderBottom: 'none', marginBottom: 0 }}>
+                                  <span style={{ color: '#5f6368' }}>Zone: {locationEval.demographicProfile}</span>
                                 </div>
                               </div>
                             )}
@@ -873,29 +928,29 @@ export default function App() {
                             </div>
                             {expandedSections['demographics'] && (
                               <div className="accordion-content">
-                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                <div className="eval-metric">
                                   <span>Income Level (Est):</span>
                                   <span>{locationEval.demographics.incomeLevel ? `$${locationEval.demographics.incomeLevel.toLocaleString()}` : 'N/A'}</span>
                                 </div>
-                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                <div className="eval-metric">
                                   <span>Daytime Pop (Est):</span>
                                   <span>{locationEval.demographics.daytimePopulation ? Math.round(locationEval.demographics.daytimePopulation).toLocaleString() : 'N/A'}</span>
                                 </div>
-                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                <div className="eval-metric">
                                   <span>Nighttime Pop (Est):</span>
                                   <span>{locationEval.demographics.nighttimePopulation ? Math.round(locationEval.demographics.nighttimePopulation).toLocaleString() : 'N/A'}</span>
                                 </div>
-                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                <div className="eval-metric">
                                   <span>Gentrification Index:</span>
-                                  <span style={{ color: locationEval.demographics.gentrificationIndicator && locationEval.demographics.gentrificationIndicator > 0 ? '#0f9d58' : 'inherit' }}>
+                                  <span style={{ color: locationEval.demographics.gentrificationIndicator && locationEval.demographics.gentrificationIndicator > 0 ? '#137333' : 'inherit' }}>
                                     {locationEval.demographics.gentrificationIndicator ? `+${locationEval.demographics.gentrificationIndicator.toFixed(1)}%` : 'N/A'}
                                   </span>
                                 </div>
-                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                <div className="eval-metric">
                                   <span>Population Growth:</span>
                                   <span>{locationEval.demographics.targetPopulationGrowth ? `+${locationEval.demographics.targetPopulationGrowth.toFixed(1)}%` : 'N/A'}</span>
                                 </div>
-                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                <div className="eval-metric" style={{ borderBottom: 'none', marginBottom: 0 }}>
                                   <span>USDA Food Desert:</span>
                                   <span>{locationEval.demographics.foodDesertStatus ? 'Yes (System Aware)' : 'No'}</span>
                                 </div>
@@ -910,36 +965,36 @@ export default function App() {
                             </div>
                             {expandedSections['costs'] && (
                               <div className="accordion-content">
-                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                <div className="eval-metric">
                                   <span>Rent Baseline (~sqft/yr):</span>
                                   <span>{locationEval.operatingCosts.estimatedRent ? `$${locationEval.operatingCosts.estimatedRent}` : 'Unknown'}</span>
                                 </div>
-                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                <div className="eval-metric">
                                   <span>Est. Utilities (/mo):</span>
                                   <span>{locationEval.operatingCosts.estimatedUtilities ? `$${locationEval.operatingCosts.estimatedUtilities.toFixed(0)}` : 'Unknown'}</span>
                                 </div>
-                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                <div className="eval-metric">
                                   <span>Est. Labor Load (% Rev):</span>
                                   <span>{locationEval.operatingCosts.laborCostPct ? `${locationEval.operatingCosts.laborCostPct}%` : 'Unknown'}</span>
                                 </div>
-                                <div className="eval-metric" style={{ fontSize: '13px' }}>
+                                <div className="eval-metric">
                                   <span>Est. Startup Costs:</span>
                                   <span>{locationEval.operatingCosts.startupCosts ? `$${locationEval.operatingCosts.startupCosts.toLocaleString()}` : 'Unknown'}</span>
                                 </div>
-                                <div className="eval-metric" style={{ fontSize: '13px', borderBottom: 'none' }}>
+                                <div className="eval-metric" style={{ borderBottom: 'none', marginBottom: 0 }}>
                                   <span>Mktg Budget (% Rev):</span>
                                   <span>{locationEval.operatingCosts.marketingPct ? `${locationEval.operatingCosts.marketingPct}%` : 'Unknown'}</span>
                                 </div>
                               </div>
                             )}
                           </div>
-                        </>
+                        </div>
                       ) : null}
                     </div>
                   )}
 
                   <MapContainer 
-                    center={selectedLocation ?[selectedLocation.lat, selectedLocation.lng] : [32.847, -117.273]} 
+                    center={selectedLocation ?[selectedLocation.lat, selectedLocation.lng] :[32.847, -117.273]} 
                     zoom={12} 
                     style={{ height: '100%', width: '100%', minHeight: '600px' }}
                     preferCanvas={true}
@@ -1008,15 +1063,14 @@ export default function App() {
                         style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
                         title="Agent LLM Settings"
                       >
-                        ⚙️
                       </button>
                     </div>
                     
                     {showAgentSettings && (
-                      <div style={{ padding: '16px', background: '#f8f9fa', borderBottom: '1px solid #e0e0e0', zIndex: 10 }}>
-                        <h4 style={{ marginBottom: '12px', fontSize: '14px', color: '#1f1f1f' }}>LLM Configuration</h4>
+                      <div style={{ padding: '24px', background: '#ffffff', borderBottom: '1px solid #f1f3f4', zIndex: 10 }}>
+                        <h4 style={{ marginBottom: '16px', fontSize: '15px', color: '#202124', fontWeight: 500 }}>LLM Configuration</h4>
                         
-                        <div className="control-group" style={{ marginBottom: '12px' }}>
+                        <div className="control-group" style={{ marginBottom: '16px' }}>
                           <label>AI Provider</label>
                           <select className="control-select" value={llmProvider} onChange={e => setLlmProvider(e.target.value)}>
                             <option value="NRP">NRP AI Gateway (OpenAI Spec)</option>
@@ -1025,7 +1079,7 @@ export default function App() {
                           </select>
                         </div>
 
-                        <div className="control-group" style={{ marginBottom: '12px' }}>
+                        <div className="control-group" style={{ marginBottom: '16px' }}>
                           <label>API Key / Bearer Token</label>
                           <input 
                             type="password" 
@@ -1037,7 +1091,7 @@ export default function App() {
                         </div>
                         
                         {llmProvider === 'OpenAI' && (
-                          <div className="control-group" style={{ marginBottom: '12px' }}>
+                          <div className="control-group" style={{ marginBottom: '16px' }}>
                             <label>Base URL Override</label>
                             <input 
                               type="text" 
@@ -1049,7 +1103,7 @@ export default function App() {
                           </div>
                         )}
 
-                        <div className="control-group" style={{ marginBottom: '16px' }}>
+                        <div className="control-group" style={{ marginBottom: '24px' }}>
                           <label>Model Engine</label>
                           <input 
                             type="text" 
@@ -1060,7 +1114,7 @@ export default function App() {
                           />
                         </div>
                         
-                        <button onClick={() => setShowAgentSettings(false)} className="primary-btn" style={{ padding: '8px 16px', width: 'auto' }}>
+                        <button onClick={() => setShowAgentSettings(false)} className="primary-btn">
                           Save & Close
                         </button>
                       </div>
@@ -1073,7 +1127,7 @@ export default function App() {
                         </div>
                       ))}
                       {isLoading && (
-                        <div className="message agent" style={{ color: '#747775', fontStyle: 'italic' }}>
+                        <div className="message agent" style={{ color: '#5f6368', fontStyle: 'italic', backgroundColor: 'transparent', border: 'none', boxShadow: 'none' }}>
                           Agent is thinking and querying via {llmProvider}...
                         </div>
                       )}
@@ -1099,64 +1153,68 @@ export default function App() {
               <>
                 <div className="manual-panel">
                   <h2 className="panel-title">Location Recommender</h2>
-                  <p style={{ fontSize: '14px', color: '#444746', marginBottom: '16px', lineHeight: '1.6' }}>
+                  <p style={{ fontSize: '15px', color: '#5f6368', marginBottom: '24px', lineHeight: '1.6' }}>
                     Type an address or click anywhere on the map to evaluate a specific point or neighborhood against our computational framework.
                     It will automatically process all available business configurations (NAICS structures) and recommend the best fit based on market gaps, local competition, demographic bonuses, and land costs.
                   </p>
 
-                  <div className="control-group" style={{ marginBottom: '16px', padding: '12px', background: '#f8f9fa', borderRadius: '8px', border: '1px solid #e0e0e0' }}>
-                    <h3 style={{ fontSize: '13px', marginBottom: '8px', color: '#1f1f1f' }}>Recommender Filters</h3>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', marginBottom: '6px' }}>
-                      <input type="checkbox" checked={recFilters.useFootTraffic} onChange={e => setRecFilters({...recFilters, useFootTraffic: e.target.checked})} />
+                  <div className="soft-box" style={{ marginBottom: '24px' }}>
+                    <h3 style={{ fontSize: '15px', marginBottom: '16px', color: '#202124', fontWeight: 500 }}>Recommender Filters</h3>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', fontSize: '14px', marginBottom: '12px', color: '#3c4043' }}>
+                      <input type="checkbox" style={{ transform: 'scale(1.2)' }} checked={recFilters.useFootTraffic} onChange={e => setRecFilters({...recFilters, useFootTraffic: e.target.checked})} />
                       Consider Foot Traffic (Pedestrian Demand)
                     </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', marginBottom: '6px' }}>
-                      <input type="checkbox" checked={recFilters.useCosts} onChange={e => setRecFilters({...recFilters, useCosts: e.target.checked})} />
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', fontSize: '14px', marginBottom: '12px', color: '#3c4043' }}>
+                      <input type="checkbox" style={{ transform: 'scale(1.2)' }} checked={recFilters.useCosts} onChange={e => setRecFilters({...recFilters, useCosts: e.target.checked})} />
                       Consider Land/Operating Costs
                     </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', marginBottom: '6px' }}>
-                      <input type="checkbox" checked={recFilters.useCompetitors} onChange={e => setRecFilters({...recFilters, useCompetitors: e.target.checked})} />
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', fontSize: '14px', marginBottom: '12px', color: '#3c4043' }}>
+                      <input type="checkbox" style={{ transform: 'scale(1.2)' }} checked={recFilters.useCompetitors} onChange={e => setRecFilters({...recFilters, useCompetitors: e.target.checked})} />
                       Penalize High Competition Densities
                     </label>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px' }}>
-                      <input type="checkbox" checked={recFilters.allowApproximations} onChange={e => setRecFilters({...recFilters, allowApproximations: e.target.checked})} />
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', fontSize: '14px', marginBottom: '16px', color: '#3c4043' }}>
+                      <input type="checkbox" style={{ transform: 'scale(1.2)' }} checked={recFilters.allowApproximations} onChange={e => setRecFilters({...recFilters, allowApproximations: e.target.checked})} />
                       Allow Proxy Bootstrapping for Missing Data
                     </label>
+                    
+                    <button className="primary-btn" onClick={() => triggerEvaluation(null, null, undefined, false, true)} disabled={isRecommending}>
+                      {isRecommending ? 'Scanning...' : 'Recommend for Current View'}
+                    </button>
                   </div>
                   
                   {selectedLocation && (
-                    <div style={{ backgroundColor: '#f0f4f9', padding: '16px', borderRadius: '8px', border: '1px solid #d3e3fd' }}>
-                      <h3 style={{ fontSize: '14px', marginBottom: '12px', color: '#041e49' }}>Selected Coordinates</h3>
-                      <div style={{ fontSize: '13px', fontFamily: 'monospace', marginBottom: '16px' }}>
+                    <div className="soft-box" style={{ backgroundColor: '#e8f0fe', borderColor: 'transparent' }}>
+                      <h3 style={{ fontSize: '16px', marginBottom: '12px', color: '#1a73e8', fontWeight: 500 }}>Selected Coordinates</h3>
+                      <div style={{ fontSize: '14px', fontFamily: 'monospace', marginBottom: '24px', color: '#3c4043' }}>
                         Lat: {selectedLocation.lat.toFixed(5)}<br/>
                         Lng: {selectedLocation.lng.toFixed(5)}
                       </div>
 
                       {isRecommending ? (
-                        <div style={{ fontSize: '13px', color: '#747775' }}>Computing cross-profile evaluations...</div>
+                        <div style={{ fontSize: '14px', color: '#5f6368' }}>Computing cross-profile evaluations...</div>
                       ) : recommendations.length > 0 ? (
                         <div>
-                          <h4 style={{ fontSize: '13px', marginBottom: '8px', color: '#1f1f1f' }}>Top Recommended Models:</h4>
+                          <h4 style={{ fontSize: '15px', marginBottom: '12px', color: '#202124', fontWeight: 500 }}>Top Recommended Models:</h4>
                           {recommendations.map((rec, i) => (
-                            <div key={i} style={{ backgroundColor: 'white', padding: '12px', borderRadius: '6px', marginBottom: '8px', borderLeft: `4px solid ${i === 0 ? '#0f9d58' : '#0b57d0'}`, boxShadow: '0 1px 2px rgba(0,0,0,0.05)' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                                <strong style={{ fontSize: '13px' }}>{rec.profile.name}</strong>
-                                <span style={{ fontWeight: 'bold', color: rec.score > 25 ? '#0f9d58' : '#1f1f1f' }}>{rec.score.toFixed(1)}</span>
+                            <div key={i} style={{ backgroundColor: 'white', padding: '16px', borderRadius: '8px', marginBottom: '12px', borderLeft: `4px solid ${i === 0 ? '#137333' : '#1a73e8'}`, boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+                                <strong style={{ fontSize: '15px', color: '#202124' }}>{rec.profile.name}</strong>
+                                <span style={{ fontWeight: 500, color: rec.score > 25 ? '#137333' : '#202124', fontSize: '16px' }}>{rec.score.toFixed(1)}</span>
                               </div>
-                              <div style={{ fontSize: '11px', color: '#747775' }}>NAICS Framework: {rec.profile.naics}</div>
-                              <div style={{ fontSize: '11px', color: '#444746', marginTop: '6px', lineHeight: '1.4' }}>{rec.details}</div>
+                              <div style={{ fontSize: '13px', color: '#5f6368' }}>NAICS Framework: {rec.profile.naics}</div>
+                              <div style={{ fontSize: '14px', color: '#3c4043', marginTop: '8px', lineHeight: '1.5' }}>{rec.details}</div>
                             </div>
                           ))}
                         </div>
                       ) : (
-                        <div style={{ fontSize: '13px', color: '#747775' }}>No recommendations generated for this point.</div>
+                        <div style={{ fontSize: '14px', color: '#5f6368' }}>No recommendations generated for this point.</div>
                       )}
                     </div>
                   )}
                 </div>
                 <div className="map-container" style={{ position: 'relative' }}>
                   <MapContainer 
-                    center={selectedLocation ?[selectedLocation.lat, selectedLocation.lng] : [32.847, -117.273]} 
+                    center={selectedLocation ?[selectedLocation.lat, selectedLocation.lng] :[32.847, -117.273]} 
                     zoom={12} 
                     style={{ height: '100%', width: '100%', minHeight: '600px' }}
                     preferCanvas={true}
@@ -1178,28 +1236,147 @@ export default function App() {
               </>
             )}
 
+            {activeTab === 'finder' && (
+              <>
+                <div className="manual-panel">
+                  <h2 className="panel-title">Global Best Match Finder</h2>
+                  <p style={{ fontSize: '14px', color: '#5f6368', marginBottom: '24px', lineHeight: '1.6' }}>
+                    Set your constraints and find the absolute best business opportunity across the map. We'll evaluate thousands of combinations to match your budget and goals.
+                  </p>
+
+                  <div className="control-group">
+                    <label>Maximum Startup Budget ($)</label>
+                    <input 
+                      type="number" 
+                      className="control-input" 
+                      placeholder="e.g. 100000" 
+                      value={finderBudget}
+                      onChange={e => setFinderBudget(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="control-group">
+                    <label>Store / Business Type (Short)</label>
+                    <select className="control-select" value={finderNaics} onChange={e => setFinderNaics(e.target.value)}>
+                      <option value="all">Any / All Types</option>
+                      {businessProfiles.map(p => (
+                          <option key={p.naics} value={p.naics}>{p.name.split(' (')[0]}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="control-group">
+                    <label>Target Open Hours</label>
+                    <div className="slider-container" style={{ marginTop: '12px' }}>
+                      <input 
+                        type="range" 
+                        className="time-slider" 
+                        min="0" 
+                        max={timeOptions.length - 1} 
+                        value={finderTime} 
+                        onChange={(e) => setFinderTime(parseInt(e.target.value))} 
+                      />
+                      <div className="time-label">{timeOptions[finderTime]}</div>
+                    </div>
+                  </div>
+
+                  <div className="control-group">
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', fontSize: '14px', color: '#3c4043' }}>
+                      <input type="checkbox" style={{ transform: 'scale(1.2)' }} checked={finderUseBounds} onChange={e => setFinderUseBounds(e.target.checked)} />
+                      Limit to Current Map View
+                    </label>
+                  </div>
+
+                  <button className="primary-btn" onClick={handleFindBestMatch} disabled={isFinding}>
+                    {isFinding ? 'Scanning Opportunities...' : 'Find Best Matches'}
+                  </button>
+
+                  {finderResults.length > 0 && (
+                    <div style={{ marginTop: '24px' }}>
+                      <h3 style={{ fontSize: '15px', marginBottom: '16px', color: '#202124', fontWeight: 500 }}>Top {finderResults.length} Opportunities:</h3>
+                      {finderResults.map((rec, i) => (
+                        <div key={i} style={{ backgroundColor: '#f8f9fa', padding: '16px', borderRadius: '8px', marginBottom: '12px', borderLeft: `4px solid ${i === 0 ? '#137333' : '#1a73e8'}`, cursor: 'pointer' }} onClick={() => handleLocationSelect(rec.lat, rec.lng)}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                            <strong style={{ fontSize: '14px', color: '#202124' }}>{rec.businessName.split(' (')[0]}</strong>
+                            <span style={{ fontWeight: 500, color: rec.score > 25 ? '#137333' : '#1a73e8', fontSize: '15px' }}>Score: {rec.score}</span>
+                          </div>
+                          <div style={{ fontSize: '12px', color: '#5f6368', marginBottom: '4px' }}>{rec.name}</div>
+                          <div style={{ fontSize: '12px', color: '#3c4043' }}>
+                            Est. Startup: ${rec.startupCosts.toLocaleString()} | Rent: ${rec.rent.toFixed(2)}/sqft
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {finderResults.length === 0 && !isFinding && (
+                    <div style={{ marginTop: '24px', fontSize: '13px', color: '#5f6368' }}>No results yet. Click "Find Best Matches" to start.</div>
+                  )}
+                </div>
+
+                <div className="map-container" style={{ position: 'relative' }}>
+                  <MapContainer 
+                    center={selectedLocation ? [selectedLocation.lat, selectedLocation.lng] :[32.847, -117.273]} 
+                    zoom={12} 
+                    style={{ height: '100%', width: '100%', minHeight: '600px' }}
+                    preferCanvas={true}
+                  >
+                    <TileLayer
+                      url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
+                      attribution='&copy; OpenStreetMap &copy; CARTO'
+                    />
+                    <MapEventHandler onBoundsChange={handleMapChange} onLocationSelect={handleLocationSelect} />
+                    
+                    {finderResults.map((p, i) => (
+                      <CircleMarker 
+                        key={`find-${i}`} 
+                        center={[p.lat, p.lng]} 
+                        radius={i === 0 ? 12 : 8} 
+                        pathOptions={{ stroke: true, color: '#000000', weight: 2, fillColor: i === 0 ? '#137333' : '#1a73e8', fillOpacity: 0.8 }}
+                        eventHandlers={{ click: () => handleLocationSelect(p.lat, p.lng) }}
+                      >
+                         <Popup>
+                           <strong>Rank #{i+1}: {p.businessName}</strong><br/>
+                           Score: {p.score}<br/>
+                           Startup: ${p.startupCosts.toLocaleString()}
+                         </Popup>
+                      </CircleMarker>
+                    ))}
+
+                    {selectedLocation && (
+                      <CircleMarker 
+                        center={[selectedLocation.lat, selectedLocation.lng]} 
+                        radius={8} 
+                        pathOptions={{ color: '#000000', weight: 2, fillColor: '#ffffff', fillOpacity: 1 }}
+                      />
+                    )}
+                  </MapContainer>
+                </div>
+              </>
+            )}
+
             {activeTab === 'db_explorer' && (
-              <div style={{ padding: '32px', width: '100%', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ backgroundColor: '#e8f0fe', padding: '20px', borderRadius: '12px', color: '#041e49', border: '1px solid #d3e3fd' }}>
-                  <strong>LLM Context Fetcher:</strong> Use this tool to query the live SDSC Postgres database and copy the JSON schema structures back to me.
+              <div style={{ padding: '40px', width: '100%', display: 'flex', flexDirection: 'column', gap: '24px', overflowY: 'auto' }}>
+                <div className="soft-box" style={{ backgroundColor: '#e8f0fe', borderColor: 'transparent', color: '#1a73e8', fontSize: '15px' }}>
+                  <strong style={{ color: '#202124' }}>LLM Context Fetcher:</strong> Use this tool to query the live SDSC Postgres database and copy the JSON schema structures back to me.
                 </div>
 
                 <div>
-                  <div style={{ fontSize: '14px', fontWeight: 500, marginBottom: '8px', color: '#444746' }}>Quick Explore Tables:</div>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                  <div style={{ fontSize: '16px', fontWeight: 500, marginBottom: '16px', color: '#202124' }}>Quick Explore Tables:</div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
                     {quickTables.map((t) => (
                       <button 
                         key={t} 
                         onClick={() => { setExploreTable(t); }} 
                         style={{ 
-                          padding: '6px 14px', 
-                          borderRadius: '16px', 
-                          border: '1px solid #0b57d0', 
-                          background: exploreTable === t ? '#0b57d0' : '#ffffff', 
-                          color: exploreTable === t ? '#ffffff' : '#0b57d0',
+                          padding: '8px 16px', 
+                          borderRadius: '24px', 
+                          border: '1px solid transparent', 
+                          background: exploreTable === t ? '#1a73e8' : '#f1f3f4', 
+                          color: exploreTable === t ? '#ffffff' : '#3c4043',
                           cursor: 'pointer', 
-                          fontSize: '13px',
-                          transition: 'all 0.2s'
+                          fontSize: '14px',
+                          fontWeight: 500,
+                          transition: 'all 0.2s ease'
                         }}
                       >
                         {t}
@@ -1208,9 +1385,9 @@ export default function App() {
                   </div>
                 </div>
 
-                <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end', marginTop: '8px' }}>
+                <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end', marginTop: '16px' }}>
                   <div style={{ flex: 1, maxWidth: '400px' }}>
-                    <label style={{ display: 'block', fontSize: '14px', fontWeight: 500, marginBottom: '8px' }}>Target Table Name</label>
+                    <label style={{ display: 'block', fontSize: '15px', fontWeight: 500, marginBottom: '12px', color: '#202124' }}>Target Table Name</label>
                     <input 
                       type="text" 
                       className="control-input" 
@@ -1225,7 +1402,7 @@ export default function App() {
                 </div>
                 <textarea 
                   readOnly 
-                  style={{ flex: 1, width: '100%', fontFamily: 'monospace', padding: '20px', border: '1px solid #e0e0e0', borderRadius: '12px', resize: 'none', backgroundColor: '#f8f9fa' }}
+                  style={{ flex: 1, width: '100%', fontFamily: 'monospace', padding: '24px', border: '1px solid transparent', borderRadius: '12px', resize: 'none', backgroundColor: '#f1f3f4', color: '#202124', fontSize: '14px' }}
                   value={exploreResult}
                 />
               </div>
