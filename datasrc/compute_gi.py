@@ -18,8 +18,10 @@ def compute_rank_delta(df, t0_col, t1_col):
 
 
 def compute_gi_score(df):
-    totpop_delta = compute_rank_delta(df, 'TOTPOP_C_1', 'TOTPOP_F_1')
-    medval_delta = compute_rank_delta(df, 'MEDVAL_C_1', 'MEDVAL_F_1')
-    medhinc_delta = compute_rank_delta(df, 'MEDHINC__1', 'MEDHINC__2')
-    medcrnt_delta = compute_rank_delta(df, 'MEDCRNT_CY', 'MEDCRNT_FY')
+    # rename the columns accordingly to available dataset
+    # updated to census renamed data column names
+    totpop_delta = compute_rank_delta(df, 'totpop23', 'totpop19')
+    medval_delta = compute_rank_delta(df, 'medhval23', 'medhval19')
+    medhinc_delta = compute_rank_delta(df, 'medhinc23', 'medhinc19')
+    medcrnt_delta = compute_rank_delta(df, 'medrent23', 'medrent19')
     return TOTPOP_R*totpop_delta + MEDVAL_R*medval_delta + MEDHINC_R*medhinc_delta + MEDCRNT_R*medcrnt_delta
