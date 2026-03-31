@@ -8,12 +8,22 @@ type Message = {
   text: string;
 };
 
+type RawStats = {
+  footTraffic: number;
+  competitors: number;
+  supporters: number;
+  averagePrice: number;
+  averageRating: number;
+};
+
 type MapData = {
   lat: number;
   lng: number;
   score: number;
   name: string;
   type: 'competitor' | 'opportunity';
+  rawStats?: RawStats;
+  breakdown?: ScoreComponent[];
 };
 
 type DetailedCosts = {
@@ -34,6 +44,9 @@ type Demographics = {
   foodInsecurityRate: number | null;
   daytimePopulation: number | null;
   nighttimePopulation: number | null;
+  populationDensity: number | null;
+  transitStopsWithinWalk: number | null;
+  retailSpendingPotential: number | null;
   source: string;
 };
 
@@ -54,6 +67,8 @@ type ScoreComponent = {
   weight: number;
   contribution: number;
   impact: string;
+  explanation: string;
+  expectation: string;
 };
 
 type LocationEvalResponse = {
@@ -74,6 +89,7 @@ type LocationEvalResponse = {
   calcBreakdown: ScoreComponent[];
   citywideActiveTaxCompetitor: number;
   assumptions: string[];
+  calculationLogs: string[];
 };
 
 function MapEventHandler({ onBoundsChange, onLocationSelect }: { 
@@ -107,7 +123,7 @@ const getRecommendationForAssumption = (text: string) => {
 
 export default function App() {
   const[activeTab, setActiveTab] = useState<'home' | 'map' | 'recommend' | 'finder' | 'db_explorer'>('map');
-  const [activeWorkspace, setActiveWorkspace] = useState('General Food Business');
+  const[activeWorkspace, setActiveWorkspace] = useState('General Food Business');
   const [messages, setMessages] = useState<Message[]>([
     { id: 1, sender: 'agent', text: 'Hello. I am the Nourish PT Data Agent backed by the AI Gateway. How can I help you find gaps in the market today?' }
   ]);
@@ -116,6 +132,7 @@ export default function App() {
   const[activeLayers, setActiveLayers] = useState<string[]>(['base_map']);
   
   const[naicsFilter, setNaicsFilter] = useState('445');
+  const[keywordFilter, setKeywordFilter] = useState('');
   const[mapPoints, setMapPoints] = useState<MapData[]>([]);
   const[debugInfo, setDebugInfo] = useState<any>(null);
   const[businessProfiles, setBusinessProfiles] = useState<any[]>([]);
@@ -137,7 +154,8 @@ export default function App() {
     costPenalty: 5.0,
     ratingBonus: 15.0,
     foodDesertBonus: 0.0,
-    gentrificationWeight: 0.0
+    gentrificationWeight: 0.0,
+    transitBonusWeight: 2.0
   });
 
   // Data Overrides
@@ -174,7 +192,8 @@ export default function App() {
     core: true,
     demographics: false,
     costs: false,
-    trace: true
+    trace: true,
+    logs: false
   });
 
   const toggleSection = (key: string) => {
@@ -197,13 +216,13 @@ export default function App() {
     const val = e.target.value;
     setScoringProfile(val);
     if (val === 'standard') {
-      setCustomWeights({ traffic: 1.0, compPenalty: 8.0, suppBonus: 1.5, costPenalty: 5.0, ratingBonus: 15.0, foodDesertBonus: 0.0, gentrificationWeight: 0.0 });
+      setCustomWeights({ traffic: 1.0, compPenalty: 8.0, suppBonus: 1.5, costPenalty: 5.0, ratingBonus: 15.0, foodDesertBonus: 0.0, gentrificationWeight: 0.0, transitBonusWeight: 2.0 });
     } else if (val === 'traffic_heavy') {
-      setCustomWeights({ traffic: 2.5, compPenalty: 5.0, suppBonus: 2.0, costPenalty: 3.0, ratingBonus: 10.0, foodDesertBonus: 0.0, gentrificationWeight: 0.0 });
+      setCustomWeights({ traffic: 2.5, compPenalty: 5.0, suppBonus: 2.0, costPenalty: 3.0, ratingBonus: 10.0, foodDesertBonus: 0.0, gentrificationWeight: 0.0, transitBonusWeight: 4.0 });
     } else if (val === 'cost_averse') {
-      setCustomWeights({ traffic: 1.0, compPenalty: 8.0, suppBonus: 1.5, costPenalty: 12.0, ratingBonus: 8.0, foodDesertBonus: 0.0, gentrificationWeight: 0.0 });
+      setCustomWeights({ traffic: 1.0, compPenalty: 8.0, suppBonus: 1.5, costPenalty: 12.0, ratingBonus: 8.0, foodDesertBonus: 0.0, gentrificationWeight: 0.0, transitBonusWeight: 2.0 });
     } else if (val === 'offset_food_deserts') {
-      setCustomWeights({ traffic: 1.5, compPenalty: 12.0, suppBonus: 2.5, costPenalty: 7.0, ratingBonus: 5.0, foodDesertBonus: 30.0, gentrificationWeight: -5.0 });
+      setCustomWeights({ traffic: 1.5, compPenalty: 12.0, suppBonus: 2.5, costPenalty: 7.0, ratingBonus: 5.0, foodDesertBonus: 30.0, gentrificationWeight: -5.0, transitBonusWeight: 1.0 });
     }
   };
 
@@ -213,6 +232,10 @@ export default function App() {
 
   const handleOverrideChange = (field: keyof typeof overrides, value: string) => {
     setOverrides(prev => ({...prev,[field]: value === '' ? null : parseFloat(value)}));
+  };
+
+  const handleBoundChange = (key: 'n'|'s'|'e'|'w', val: number) => {
+    setMapBounds(prev => prev ? { ...prev, [key]: val } : null);
   };
 
   const[showAgentSettings, setShowAgentSettings] = useState(false);
@@ -265,6 +288,8 @@ export default function App() {
         let url = `http://localhost:8081/api/recommend-business?useFootTraffic=${recFilters.useFootTraffic}&useCosts=${recFilters.useCosts}&useCompetitors=${recFilters.useCompetitors}&allowApproximations=${recFilters.allowApproximations}&targetTime=${encodeURIComponent(timeOptions[timeSliderIndex])}`;
         if (address) url += `&address=${encodeURIComponent(address)}`;
         if (lat && lng) url += `&lat=${lat}&lng=${lng}`;
+        if (keywordFilter) url += `&keyword=${encodeURIComponent(keywordFilter)}`;
+        
         if (useBounds && mapBounds) {
           url += `&n=${mapBounds.n}&s=${mapBounds.s}&e=${mapBounds.e}&w=${mapBounds.w}`;
         }
@@ -291,16 +316,17 @@ export default function App() {
         const payload = {
           lat: lat || 0,
           lng: lng || 0,
+          address: address || "",
           n: (useBounds && mapBounds) ? mapBounds.n : 0,
           s: (useBounds && mapBounds) ? mapBounds.s : 0,
           e: (useBounds && mapBounds) ? mapBounds.e : 0,
           w: (useBounds && mapBounds) ? mapBounds.w : 0,
-          address: address || "",
           useFootTraffic: true,
           useCosts: true,
           useCompetitors: true,
           allowApproximations: allowApproximations,
           naics: naicsFilter,
+          keyword: keywordFilter,
           computationMethod: computationMethod,
           targetTime: timeOptions[timeSliderIndex],
           trafficW: customWeights.traffic,
@@ -310,6 +336,7 @@ export default function App() {
           ratingW: customWeights.ratingBonus,
           foodDesertW: customWeights.foodDesertBonus,
           gentrificationW: customWeights.gentrificationWeight,
+          transitW: customWeights.transitBonusWeight,
           overrides: isOverrideSubmit ? overrides : {}
         };
 
@@ -341,6 +368,9 @@ export default function App() {
         }
         if (finderNaics !== 'all') {
             url += `&naics=${finderNaics}`;
+        }
+        if (keywordFilter) {
+            url += `&keyword=${encodeURIComponent(keywordFilter)}`;
         }
         if (finderUseBounds && mapBounds) {
             url += `&n=${mapBounds.n}&s=${mapBounds.s}&e=${mapBounds.e}&w=${mapBounds.w}`;
@@ -415,7 +445,8 @@ export default function App() {
 
     setIsLoading(true);
     try {
-      let url = `http://localhost:8081/api/opportunity-map?naics=${naicsFilter}&allowApproximations=${allowApproximations}&computationMethod=${computationMethod}&targetTime=${encodeURIComponent(timeOptions[timeSliderIndex])}&trafficW=${customWeights.traffic}&compW=${customWeights.compPenalty}&suppW=${customWeights.suppBonus}&costW=${customWeights.costPenalty}&ratingW=${customWeights.ratingBonus}&foodDesertW=${customWeights.foodDesertBonus}&gentrificationW=${customWeights.gentrificationWeight}`;
+      let url = `http://localhost:8081/api/opportunity-map?naics=${naicsFilter}&allowApproximations=${allowApproximations}&computationMethod=${computationMethod}&targetTime=${encodeURIComponent(timeOptions[timeSliderIndex])}&trafficW=${customWeights.traffic}&compW=${customWeights.compPenalty}&suppW=${customWeights.suppBonus}&costW=${customWeights.costPenalty}&ratingW=${customWeights.ratingBonus}&foodDesertW=${customWeights.foodDesertBonus}&gentrificationW=${customWeights.gentrificationWeight}&transitW=${customWeights.transitBonusWeight}`;
+      if (keywordFilter) url += `&keyword=${encodeURIComponent(keywordFilter)}`;
       if (mapBounds) {
         url += `&n=${mapBounds.n}&s=${mapBounds.s}&e=${mapBounds.e}&w=${mapBounds.w}`;
       }
@@ -425,13 +456,26 @@ export default function App() {
       setMapPoints(payload.data?.points ||[]);
       setDebugInfo(payload.data?.debug || null);
       setActiveLayers([
-        `NAICS Prefix: ${naicsFilter}`
-      ]);
+        `NAICS Prefix: ${naicsFilter}`,
+        keywordFilter ? `Keyword: ${keywordFilter}` : ''
+      ].filter(Boolean));
     } catch (error) {
       console.error("Manual search failed", error);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleDownloadLogs = () => {
+    if (!locationEval || !locationEval.calculationLogs) return;
+    const logContent = locationEval.calculationLogs.join('\n');
+    const blob = new Blob([logContent], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `opportunity_calc_logs_${locationEval.lat.toFixed(4)}_${locationEval.lng.toFixed(4)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleMapChange = (n: number, s: number, e: number, w: number) => {
@@ -449,7 +493,7 @@ export default function App() {
       return () => clearTimeout(delayDebounceFn);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[naicsFilter, allowApproximations, computationMethod, customWeights, mapBounds, activeTab, liveCalculation, timeSliderIndex]);
+  },[naicsFilter, keywordFilter, allowApproximations, computationMethod, customWeights, mapBounds, activeTab, liveCalculation, timeSliderIndex]);
 
   const handleExploreDB = async () => {
     setExploreResult('Querying database...');
@@ -482,10 +526,10 @@ export default function App() {
   };
 
   const getHeatmapColor = (score: number) => {
-    if (score > 40) return '#b2182b'; 
-    if (score > 25) return '#ef8a62'; 
-    if (score > 5) return '#fddbc7'; 
-    if (score > -10) return '#d1e5f0'; 
+    if (score > 60) return '#b2182b'; 
+    if (score > 50) return '#ef8a62'; 
+    if (score > 40) return '#fddbc7'; 
+    if (score > 25) return '#d1e5f0'; 
     return '#92c5de'; 
   };
 
@@ -505,17 +549,33 @@ export default function App() {
         
         <div className="header-actions" style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
           {(activeTab === 'map' || activeTab === 'recommend' || activeTab === 'finder') && (
-            <div style={{ display: 'flex', gap: '12px', maxWidth: '440px', width: '100%' }}>
-              <input 
-                type="text" 
-                className="control-input" 
-                style={{ padding: '10px 16px', borderRadius: '24px' }}
-                placeholder="Search an address or block group..." 
-                value={addressInput}
-                onChange={e => setAddressInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleAddressSearch(); }}
-              />
-              <button className="primary-btn" style={{ width: 'auto', padding: '10px 24px', borderRadius: '24px' }} onClick={handleAddressSearch}>Find</button>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', maxWidth: '500px', width: '100%', alignItems: 'center', marginTop: '4px' }}>
+              <div style={{ display: 'flex', gap: '8px', width: '100%' }}>
+                <input 
+                  type="text" 
+                  className="control-input" 
+                  style={{ padding: '6px 16px', borderRadius: '16px', flex: 1 }}
+                  placeholder="Search an address or block group..." 
+                  value={addressInput}
+                  onChange={e => setAddressInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') handleAddressSearch(); }}
+                />
+                <button className="primary-btn" style={{ width: 'auto', padding: '6px 20px', borderRadius: '16px' }} onClick={handleAddressSearch}>Find</button>
+              </div>
+              <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                <span style={{ fontSize: '11px', color: '#5f6368', fontWeight: 500 }}>Bounds:</span>
+                <input type="number" step="0.01" value={mapBounds?.n ?? ''} onChange={e => handleBoundChange('n', parseFloat(e.target.value))} className="control-input" style={{ width: '65px', padding: '2px', textAlign: 'center', fontSize: '11px', borderRadius: '4px' }} placeholder="N" />
+                <input type="number" step="0.01" value={mapBounds?.s ?? ''} onChange={e => handleBoundChange('s', parseFloat(e.target.value))} className="control-input" style={{ width: '65px', padding: '2px', textAlign: 'center', fontSize: '11px', borderRadius: '4px' }} placeholder="S" />
+                <input type="number" step="0.01" value={mapBounds?.w ?? ''} onChange={e => handleBoundChange('w', parseFloat(e.target.value))} className="control-input" style={{ width: '65px', padding: '2px', textAlign: 'center', fontSize: '11px', borderRadius: '4px' }} placeholder="W" />
+                <input type="number" step="0.01" value={mapBounds?.e ?? ''} onChange={e => handleBoundChange('e', parseFloat(e.target.value))} className="control-input" style={{ width: '65px', padding: '2px', textAlign: 'center', fontSize: '11px', borderRadius: '4px' }} placeholder="E" />
+                <button className="primary-btn" style={{ width: 'auto', padding: '2px 10px', borderRadius: '8px', fontSize: '11px' }} onClick={() => {
+                  if(activeTab === 'map') handleManualSearch();
+                  else if (activeTab === 'recommend') triggerEvaluation(null, null, undefined, false, true);
+                  else if (activeTab === 'finder') handleFindBestMatch();
+                }}>
+                  Scan
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -550,7 +610,7 @@ export default function App() {
           <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>sandag_layer_zoning_base_sd_new</div>
           <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>esri_consumer_spending_data_</div>
           <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>nourish_ref_bakery_economics</div>
-          <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>sd_roads</div>
+          <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>sd_roads / sd_transit_stops</div>
           <div className="sidebar-item" style={{ fontSize: '13px', color: '#5f6368', padding: '8px 16px', cursor: 'default' }}>pass_by_retail_store_foot_traffic</div>
         </aside>
 
@@ -574,13 +634,13 @@ export default function App() {
                   
                   <h3>Two Core Functions</h3>
                   <ul>
-                    <li><strong>Start from Business Type:</strong> Select a business structure (e.g. Healthy Grocery) and our engine highlights the optimal parcels.</li>
+                    <li><strong>Start from Business Type:</strong> Select a business structure and our engine highlights the optimal parcels.</li>
                     <li><strong>Start from Location:</strong> Click anywhere on our map and the system recommends the most mathematically viable NAICS entity to open.</li>
                   </ul>
 
                   <h3>The Opportunity Scoring Methodology</h3>
                   <div className="equation-box">
-                    Opportunity Score = Base (0) + Foot Traffic Impact + Supportive Biz Bonus - Cost Penalties - Competition Penalties + Market Gap Bonus + Food Desert Offset
+                    Opportunity Score = Base (50) + Foot Traffic Impact + Supportive Biz Bonus + Transit Proximity - Cost Penalties - Competition Penalties + Market Gap Bonus + Food Desert Offset
                   </div>
 
                   <h3>Data Sources Being Queried</h3>
@@ -589,6 +649,7 @@ export default function App() {
                     <li><strong>nourish_cbg_pedestrian_flow & san_diego_areawise_foot_traffic:</strong> UCSF foot traffic data to estimate organic walk-in volume.</li>
                     <li><strong>nourish_cbg_food_environment:</strong> USDA food desert block group cross-referencing.</li>
                     <li><strong>sandag_layer_zoning_base_sd_new:</strong> Commercial and Mixed-Use development zones.</li>
+                    <li><strong>sd_transit_stops:</strong> Local transit proximity radius evaluations.</li>
                   </ul>
                 </div>
               </div>
@@ -599,7 +660,7 @@ export default function App() {
                 <div className="manual-panel">
                   <h2 className="panel-title">Scoring Function Selection</h2>
 
-                  <div className="control-group">
+                  <div className="control-group" style={{ marginBottom: '16px' }}>
                     <label>Business Vertical / Goal Profile</label>
                     <select className="control-select" value={naicsFilter} onChange={e => {
                         const profile = businessProfiles.find(p => p.naics === e.target.value);
@@ -612,7 +673,8 @@ export default function App() {
                                 costPenalty: profile.costPenaltyWeight,
                                 ratingBonus: profile.ratingBonusWeight,
                                 foodDesertBonus: profile.foodDesertBonus,
-                                gentrificationWeight: profile.gentrificationWeight
+                                gentrificationWeight: profile.gentrificationWeight,
+                                transitBonusWeight: profile.transitBonusWeight
                             });
                             setScoringProfile('custom');
                         }
@@ -628,6 +690,17 @@ export default function App() {
                           </>
                       )}
                     </select>
+                  </div>
+
+                  <div className="control-group" style={{ marginTop: '-4px', marginBottom: '24px' }}>
+                    <label style={{ fontSize: '12px', color: '#5f6368', fontWeight: 400 }}>Optional Keyword Targeting (pizza, vegan, ...)</label>
+                    <input 
+                      type="text" 
+                      className="control-input" 
+                      placeholder="Any keyword..." 
+                      value={keywordFilter}
+                      onChange={e => setKeywordFilter(e.target.value)}
+                    />
                   </div>
 
                   <div className="control-group">
@@ -661,6 +734,10 @@ export default function App() {
                       <div className="control-group" style={{ marginBottom: '12px' }}>
                         <label style={{ fontSize: '13px' }}>Traffic Positivity Weight</label>
                         <input type="number" step="0.5" className="control-input" value={customWeights.traffic} onChange={e => handleWeightChange('traffic', e.target.value)} />
+                      </div>
+                      <div className="control-group" style={{ marginBottom: '12px' }}>
+                        <label style={{ fontSize: '13px' }}>Transit Proximity Bonus Multiplier</label>
+                        <input type="number" step="0.5" className="control-input" value={customWeights.transitBonusWeight} onChange={e => handleWeightChange('transitBonusWeight', e.target.value)} />
                       </div>
                       <div className="control-group" style={{ marginBottom: '12px' }}>
                         <label style={{ fontSize: '13px' }}>Competitor Penalty Multiplier</label>
@@ -710,7 +787,7 @@ export default function App() {
                     </label>
                     {showLiveWarning && (
                       <div className="alert-box" style={{ marginTop: '12px' }}>
-                        ⚠️ Rapid calculations detected. Consider turning this off to limit heavy data processing while adjusting map bounds.
+                        Rapid calculations detected. Consider turning this off to limit heavy data processing while adjusting map bounds.
                       </div>
                     )}
                   </div>
@@ -780,16 +857,16 @@ export default function App() {
 
                   {selectedLocation && (
                     <div className="evaluation-panel">
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <h3 style={{ margin: 0 }}>Enterprise Location Eval</h3>
                         <button onClick={() => setSelectedLocation(null)} style={{ border: 'none', background: 'none', cursor: 'pointer', fontSize: '20px', color: '#5f6368' }}>✖</button>
                       </div>
                       
                       {isEvaluating ? (
-                        <div style={{ padding: '0 24px 24px 24px', fontSize: '14px', color: '#5f6368' }}>Running database queries on coordinates...</div>
+                        <div style={{ padding: '24px', fontSize: '14px', color: '#5f6368' }}>Running database queries on coordinates...</div>
                       ) : locationEval ? (
-                        <div style={{ maxHeight: 'calc(100vh - 180px)', overflowY: 'auto' }}>
-                          <div className="eval-header-top">
+                        <div style={{ flex: 1, overflowY: 'auto', paddingBottom: '24px' }}>
+                          <div className="eval-header-top" style={{ paddingTop: '24px' }}>
                              <div className="eval-score-text" style={{color: getHeatmapColor(locationEval.opportunityScore), fontSize: '32px', fontWeight: 'bold'}}>
                                 {locationEval.opportunityScore.toFixed(1)}
                              </div>
@@ -826,31 +903,31 @@ export default function App() {
                                               <div style={{ display: 'flex', gap: '12px' }}>
                                                 <div style={{ flex: 1 }}>
                                                   <label style={{ fontSize: '12px', color: '#5f6368', display: 'block', marginBottom: '6px' }}>Rent ($/sqft/yr)</label>
-                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.rent || ''} onChange={e => handleOverrideChange('rent', e.target.value)} placeholder="e.g. 35" />
+                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.rent || ''} onChange={e => handleOverrideChange('rent', e.target.value)} placeholder="35" />
                                                 </div>
                                                 <div style={{ flex: 1 }}>
                                                   <label style={{ fontSize: '12px', color: '#5f6368', display: 'block', marginBottom: '6px' }}>Foot Traffic</label>
-                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.footTraffic || ''} onChange={e => handleOverrideChange('footTraffic', e.target.value)} placeholder="e.g. 5000" />
+                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.footTraffic || ''} onChange={e => handleOverrideChange('footTraffic', e.target.value)} placeholder="5000" />
                                                 </div>
                                               </div>
                                               <div style={{ display: 'flex', gap: '12px' }}>
                                                 <div style={{ flex: 1 }}>
                                                   <label style={{ fontSize: '12px', color: '#5f6368', display: 'block', marginBottom: '6px' }}>Labor Cost (%)</label>
-                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.laborCostPct || ''} onChange={e => handleOverrideChange('laborCostPct', e.target.value)} placeholder="e.g. 30" />
+                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.laborCostPct || ''} onChange={e => handleOverrideChange('laborCostPct', e.target.value)} placeholder="30" />
                                                 </div>
                                                 <div style={{ flex: 1 }}>
                                                   <label style={{ fontSize: '12px', color: '#5f6368', display: 'block', marginBottom: '6px' }}>Startup Cost ($)</label>
-                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.startupCosts || ''} onChange={e => handleOverrideChange('startupCosts', e.target.value)} placeholder="e.g. 150000" />
+                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.startupCosts || ''} onChange={e => handleOverrideChange('startupCosts', e.target.value)} placeholder="150000" />
                                                 </div>
                                               </div>
                                               <div style={{ display: 'flex', gap: '12px' }}>
                                                 <div style={{ flex: 1 }}>
                                                   <label style={{ fontSize: '12px', color: '#5f6368', display: 'block', marginBottom: '6px' }}>Income Level ($)</label>
-                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.incomeLevel || ''} onChange={e => handleOverrideChange('incomeLevel', e.target.value)} placeholder="e.g. 80000" />
+                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.incomeLevel || ''} onChange={e => handleOverrideChange('incomeLevel', e.target.value)} placeholder="80000" />
                                                 </div>
                                                 <div style={{ flex: 1 }}>
                                                   <label style={{ fontSize: '12px', color: '#5f6368', display: 'block', marginBottom: '6px' }}>Daytime Pop.</label>
-                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.daytimePop || ''} onChange={e => handleOverrideChange('daytimePop', e.target.value)} placeholder="e.g. 12000" />
+                                                  <input type="number" className="control-input" style={{ padding: '10px' }} value={overrides.daytimePop || ''} onChange={e => handleOverrideChange('daytimePop', e.target.value)} placeholder="12000" />
                                                 </div>
                                               </div>
                                             </div>
@@ -881,6 +958,8 @@ export default function App() {
                                         <div className="bd-name">
                                             <strong>{item.name}</strong>
                                             <span className="bd-sub">Raw Value: {item.rawValue.toFixed(1)} | Applied Wt: {item.weight.toFixed(1)}</span>
+                                            <span className="bd-sub" style={{ fontSize: '11px', color: '#5f6368', marginTop: '4px', display: 'block' }}>{item.explanation}</span>
+                                            <span className="bd-sub" style={{ fontSize: '11px', color: '#137333', marginTop: '2px', display: 'block', fontWeight: 500 }}>Expectation: {item.expectation}</span>
                                         </div>
                                         <div className="bd-val">
                                             {item.contribution > 0 ? '+' : ''}{item.contribution.toFixed(1)}
@@ -933,6 +1012,14 @@ export default function App() {
                                   <span>{locationEval.demographics.incomeLevel ? `$${locationEval.demographics.incomeLevel.toLocaleString()}` : 'N/A'}</span>
                                 </div>
                                 <div className="eval-metric">
+                                  <span>Pop Density (/sq mi):</span>
+                                  <span>{locationEval.demographics.populationDensity ? Math.round(locationEval.demographics.populationDensity).toLocaleString() : 'N/A'}</span>
+                                </div>
+                                <div className="eval-metric">
+                                  <span>Transit Stops (800m):</span>
+                                  <span>{locationEval.demographics.transitStopsWithinWalk !== null ? locationEval.demographics.transitStopsWithinWalk : 'N/A'}</span>
+                                </div>
+                                <div className="eval-metric">
                                   <span>Daytime Pop (Est):</span>
                                   <span>{locationEval.demographics.daytimePopulation ? Math.round(locationEval.demographics.daytimePopulation).toLocaleString() : 'N/A'}</span>
                                 </div>
@@ -967,7 +1054,7 @@ export default function App() {
                               <div className="accordion-content">
                                 <div className="eval-metric">
                                   <span>Rent Baseline (~sqft/yr):</span>
-                                  <span>{locationEval.operatingCosts.estimatedRent ? `$${locationEval.operatingCosts.estimatedRent}` : 'Unknown'}</span>
+                                  <span>{locationEval.operatingCosts.estimatedRent ? `$${locationEval.operatingCosts.estimatedRent.toFixed(2)}` : 'Unknown'}</span>
                                 </div>
                                 <div className="eval-metric">
                                   <span>Est. Utilities (/mo):</span>
@@ -988,6 +1075,36 @@ export default function App() {
                               </div>
                             )}
                           </div>
+                          
+                          {locationEval.calculationLogs && locationEval.calculationLogs.length > 0 && (
+                            <div className="accordion-section" style={{ backgroundColor: '#1e1e1e' }}>
+                              <div className="accordion-header" onClick={() => toggleSection('logs')} style={{ borderBottom: expandedSections['logs'] ? '1px solid #333' : 'none' }}>
+                                 <h4 style={{ color: '#4caf50', fontFamily: 'monospace', fontSize: '13px', margin: 0 }}>&gt;_ Execution & Math Logs</h4>
+                                 <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                                   {expandedSections['logs'] && (
+                                     <button 
+                                       onClick={(e) => { e.stopPropagation(); handleDownloadLogs(); }}
+                                       style={{ background: '#333', color: '#fff', border: 'none', padding: '4px 8px', borderRadius: '4px', fontSize: '11px', cursor: 'pointer' }}
+                                     >
+                                       Download .TXT
+                                     </button>
+                                   )}
+                                   <span style={{color: '#999'}}>{expandedSections['logs'] ? '▲' : '▼'}</span>
+                                 </div>
+                              </div>
+                              {expandedSections['logs'] && (
+                                <div className="accordion-content" style={{ backgroundColor: '#1e1e1e', padding: '16px', color: '#d4d4d4', fontFamily: 'monospace', fontSize: '11px', lineHeight: '1.6' }}>
+                                  {locationEval.calculationLogs.map((log, i) => (
+                                    <div key={i} style={{ marginBottom: '6px', wordBreak: 'break-word' }}>
+                                      <span style={{ color: log.startsWith('WARN') || log.startsWith('MODEL') ? '#e6b450' : log.startsWith('CMD') || log.startsWith('FUSION') ? '#569cd6' : log.startsWith('MATH') ? '#ce9178' : '#d4d4d4' }}>
+                                        {log}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       ) : null}
                     </div>
@@ -1014,28 +1131,56 @@ export default function App() {
                         pathOptions={{ color: '#ffffff', weight: 1, fillColor: '#000000', fillOpacity: 0.5 }}
                         eventHandlers={{ click: () => handleLocationSelect(p.lat, p.lng) }}
                       >
-                        <Popup>{p.name}</Popup>
+                        <Popup>
+                          <strong>{p.name}</strong><br />
+                          {p.rawStats && (
+                            <div style={{fontSize: '11px', marginTop: '4px', color: '#5f6368'}}>
+                              Raw Stats:<br/>
+                              - Traffic: {p.rawStats.footTraffic}<br/>
+                              - Avg Rating: {p.rawStats.averageRating?.toFixed(1) || 'N/A'}
+                            </div>
+                          )}
+                        </Popup>
                       </CircleMarker>
                     ))}
 
+                    {/* Render pulsing halos beneath the top opportunities to pinpoint them */}
+                    {mapPoints.filter(p => p.type === 'opportunity' && p.score === maxScore && maxScore > 50).map((p, i) => (
+                       <CircleMarker
+                         key={`halo-${i}`}
+                         center={[p.lat, p.lng]}
+                         radius={30}
+                         className="top-score-halo"
+                         pathOptions={{ color: '#fbbc04', weight: 3, fillColor: '#fbbc04', fillOpacity: 0.4 }}
+                       />
+                    ))}
+
                     {mapPoints.filter(p => p.type === 'opportunity').map((p, i) => {
-                      const isTopScore = p.score === maxScore && maxScore > 5;
+                      const isTopScore = p.score === maxScore && maxScore > 50;
                       const isAllocated = p.name.includes('[Top Allocated Parcel]');
                       return (
                         <CircleMarker 
                           key={`opp-${i}`} 
                           center={[p.lat, p.lng]} 
-                          radius={heatmapMode ? (isAllocated ? 35 : Math.max(4, 15 + (p.score / 5))) : (isAllocated ? 10 : 5)} 
+                          radius={heatmapMode ? (isAllocated ? 35 : Math.max(4, 15 + ((p.score - 50) / 5))) : (isTopScore || isAllocated ? 10 : 5)} 
                           pathOptions={
                             heatmapMode 
-                              ? { stroke: isTopScore || isAllocated, color: isAllocated ? '#fbbc04' : undefined, weight: 3, fillColor: getHeatmapColor(p.score), fillOpacity: p.score < 5 ? 0.2 : 0.6 }
-                              : { stroke: true, color: isAllocated ? '#fbbc04' : '#1f1f1f', weight: isAllocated ? 3 : 1, fillColor: getHeatmapColor(p.score), fillOpacity: 0.9 }
+                              ? { stroke: isTopScore || isAllocated, color: isTopScore || isAllocated ? '#fbbc04' : undefined, weight: 3, fillColor: getHeatmapColor(p.score), fillOpacity: p.score < 50 ? 0.2 : 0.8 }
+                              : { stroke: true, color: isTopScore || isAllocated ? '#fbbc04' : '#1f1f1f', weight: isTopScore || isAllocated ? 3 : 1, fillColor: getHeatmapColor(p.score), fillOpacity: 0.9 }
                           }
                           eventHandlers={{ click: () => handleLocationSelect(p.lat, p.lng) }}
                         >
                            <Popup>
-                             <strong>{p.name} {isAllocated && "🌟 Top System Pick"}</strong><br/>
-                             Opportunity Score: {p.score}
+                             <strong>{p.name} {isTopScore && "🌟 Top Regional Score"}</strong><br/>
+                             Opportunity Score: {p.score}<br/>
+                             {p.rawStats && (
+                               <div style={{fontSize: '11px', marginTop: '4px', color: '#5f6368'}}>
+                                 Raw Stats:<br/>
+                                 - Traffic Output: {p.rawStats.footTraffic}<br/>
+                                 - Competitors: {p.rawStats.competitors}<br/>
+                                 - Supporters: {p.rawStats.supporters}
+                               </div>
+                             )}
                            </Popup>
                         </CircleMarker>
                       );
@@ -1199,7 +1344,7 @@ export default function App() {
                             <div key={i} style={{ backgroundColor: 'white', padding: '16px', borderRadius: '8px', marginBottom: '12px', borderLeft: `4px solid ${i === 0 ? '#137333' : '#1a73e8'}`, boxShadow: '0 2px 4px rgba(0,0,0,0.05)' }}>
                               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                                 <strong style={{ fontSize: '15px', color: '#202124' }}>{rec.profile.name}</strong>
-                                <span style={{ fontWeight: 500, color: rec.score > 25 ? '#137333' : '#202124', fontSize: '16px' }}>{rec.score.toFixed(1)}</span>
+                                <span style={{ fontWeight: 500, color: rec.score > 50 ? '#137333' : '#202124', fontSize: '16px' }}>{rec.score.toFixed(1)}</span>
                               </div>
                               <div style={{ fontSize: '13px', color: '#5f6368' }}>NAICS Framework: {rec.profile.naics}</div>
                               <div style={{ fontSize: '14px', color: '#3c4043', marginTop: '8px', lineHeight: '1.5' }}>{rec.details}</div>
@@ -1249,7 +1394,7 @@ export default function App() {
                     <input 
                       type="number" 
                       className="control-input" 
-                      placeholder="e.g. 100000" 
+                      placeholder="100000" 
                       value={finderBudget}
                       onChange={e => setFinderBudget(e.target.value)}
                     />
@@ -1263,6 +1408,17 @@ export default function App() {
                           <option key={p.naics} value={p.naics}>{p.name.split(' (')[0]}</option>
                       ))}
                     </select>
+                  </div>
+
+                  <div className="control-group" style={{ marginTop: '-4px', marginBottom: '24px' }}>
+                    <label style={{ fontSize: '12px', color: '#5f6368', fontWeight: 400 }}>Optional Keyword Targeting (bakery, health)</label>
+                    <input 
+                      type="text" 
+                      className="control-input" 
+                      placeholder="Any keyword..." 
+                      value={keywordFilter}
+                      onChange={e => setKeywordFilter(e.target.value)}
+                    />
                   </div>
 
                   <div className="control-group">
@@ -1298,7 +1454,7 @@ export default function App() {
                         <div key={i} style={{ backgroundColor: '#f8f9fa', padding: '16px', borderRadius: '8px', marginBottom: '12px', borderLeft: `4px solid ${i === 0 ? '#137333' : '#1a73e8'}`, cursor: 'pointer' }} onClick={() => handleLocationSelect(rec.lat, rec.lng)}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
                             <strong style={{ fontSize: '14px', color: '#202124' }}>{rec.businessName.split(' (')[0]}</strong>
-                            <span style={{ fontWeight: 500, color: rec.score > 25 ? '#137333' : '#1a73e8', fontSize: '15px' }}>Score: {rec.score}</span>
+                            <span style={{ fontWeight: 500, color: rec.score > 50 ? '#137333' : '#1a73e8', fontSize: '15px' }}>Score: {rec.score}</span>
                           </div>
                           <div style={{ fontSize: '12px', color: '#5f6368', marginBottom: '4px' }}>{rec.name}</div>
                           <div style={{ fontSize: '12px', color: '#3c4043' }}>
@@ -1315,7 +1471,7 @@ export default function App() {
 
                 <div className="map-container" style={{ position: 'relative' }}>
                   <MapContainer 
-                    center={selectedLocation ? [selectedLocation.lat, selectedLocation.lng] :[32.847, -117.273]} 
+                    center={selectedLocation ?[selectedLocation.lat, selectedLocation.lng] :[32.847, -117.273]} 
                     zoom={12} 
                     style={{ height: '100%', width: '100%', minHeight: '600px' }}
                     preferCanvas={true}
@@ -1337,7 +1493,15 @@ export default function App() {
                          <Popup>
                            <strong>Rank #{i+1}: {p.businessName}</strong><br/>
                            Score: {p.score}<br/>
-                           Startup: ${p.startupCosts.toLocaleString()}
+                           Startup: ${p.startupCosts.toLocaleString()}<br/>
+                           {p.rawStats && (
+                             <div style={{fontSize: '11px', marginTop: '4px', color: '#5f6368'}}>
+                               Raw Stats:<br/>
+                               - Traffic: {p.rawStats.footTraffic}<br/>
+                               - Competitors: {p.rawStats.competitors}<br/>
+                               - Supporters: {p.rawStats.supporters}
+                             </div>
+                           )}
                          </Popup>
                       </CircleMarker>
                     ))}
@@ -1393,7 +1557,7 @@ export default function App() {
                       className="control-input" 
                       value={exploreTable} 
                       onChange={(e) => setExploreTable(e.target.value)} 
-                      placeholder="e.g. nourish_cbg_food_environment"
+                      placeholder="nourish_cbg_food_environment"
                     />
                   </div>
                   <button className="primary-btn" style={{ width: 'auto' }} onClick={handleExploreDB}>

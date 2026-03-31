@@ -367,10 +367,14 @@ body {
   width: 420px;
   border: 1px solid rgba(0,0,0,0.05);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 140px); /* Constrains panel strictly to viewport */
 }
 
 .evaluation-panel > div:first-child {
-  padding: 24px 24px 0 24px;
+  padding: 24px 24px 20px 24px;
+  border-bottom: 1px solid #f1f3f4; /* Adds a visual separator for the sticky header */
 }
 
 .evaluation-panel h3 {
