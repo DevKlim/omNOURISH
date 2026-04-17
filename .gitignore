@@ -1,2 +1,8 @@
 .env
 data/db_schema_dump.json
+data/
+data.zip
+context.md
+opportunity_map.ipynb
+queries_for_understanding.sql
+generate_structure.py

@@ -1,27 +1,47 @@
-# omNOURISH: Live Opportunity Mapper
+# omNOURISH: Live Opportunity Mapper & Evaluation Engine
 
 ## Project Alignment & Overview
-This project provides a live-updating opportunity map designed to identify the best locations for food businesses in San Diego County. It addresses the goals established in the recent team meetings, emphasizing accurate 2022 NAICS codes standardization, demographic block-group profiling, UCSF foot traffic data integration, and community mapping. 
+This project provides a live-updating opportunity map designed to identify the best locations for food businesses in San Diego County. It utilizes an advanced mathematical Opportunity Scoring framework bridging spatial variables (L, M, P, T) and entrepreneur attributes (E).
 
-It heavily focuses on integrating dynamic indicators like Gentrification/Income and Offsetting Food Deserts to locate highly impactful market gaps.
+The Go backend (`/backend`) has been modularized and implements real-time spatial evaluations utilizing the PostgreSQL database tables documented below. 
 
-## Architecture & Mapping Stack
-- **Backend:** Go (Golang) handling API endpoints, PostgreSQL connections, and the Agent Chat service. The API exposes dual endpoints starting either from a selected location, or a selected NAICS business configuration framework.
-- **Frontend:** React + TypeScript via Vite. 
-- **Mapping Stack Evolution (Choosing the Right Mapping Library):**
-  - *Previous Approach:* Leaflet using thousands of SVG rectangles/hexagons. DOM bloat caused severe lag, and polygons were rendering over unbuildable space like the ocean.
-  - *MapLibre Attempt:* WebGL creation failed in the testing environment (`FEATURE_FAILURE_WEBGL_EXHAUSTED_DRIVERS`).
-  - *Current Approach:* **Leaflet (Canvas-Accelerated)** via `react-leaflet`. We reverted to Leaflet but injected the `preferCanvas={true}` configuration. This eliminates the DOM-bloat lag entirely by rendering all points on a single `<canvas>` element. We also completely rewrote the backend logic to generate points strictly along viable commercial parcels (bypassing unzoned areas like the ocean). To simulate a WebGL heatmap, we render layered, semi-transparent opportunity bubbles directly via the Leaflet Canvas API.
+## Architectural Refactoring
+The backend monolith `main.go` has been refactored for clarity and domain organization:
+- `main.go`: Application initialization, environment configuration, and HTTP routing mapping.
+- `models.go`: Unified application and mathematics struct definitions (including NAICS mapping matrices).
+- `data.go`: Database connection state, global cache bindings, and geospatial processing functions.
+- `api.go`: Exposed web handler routes servicing map points, recommender systems, and individual location polling.
+- `scoring.go`: Core domain mathematics logic processing NAICS scaling algorithms and L, E, M, P, T structural variables.
+- `llm.go`: External AI Gateway handlers.
+
+## Opportunity Evaluation Framework (The Math)
+The backend evaluates block groups using the following mathematical formulation:
+
+**Core Math**:
+`CO = (MF^0.4 * LF^0.4 * PF^0.2)^(1 / 1.0)`
+`Sfinal = clip(CO * RF * TF * ME)`
+
+### The Indicators & Active Table Queries
+The `calculateOpportunityScore()` function inside `scoring.go` maps indicator constants dynamically via spatial queries:
+
+**Location & Demographics (L & M)**
+*   **L1 (Pop Density) / M4 (Pop Size):** Queried against `bgs_sd_imp` (`totpop_cy` relative to spatial geographic area sizing).
+*   **L2 (Median Household Income):** Queried directly via `medhinc_cy` on `bgs_sd_imp`.
+*   **L4 (Commercial Rent):** Queried via Esri mapping `esri_consumer_spending_data_`.
+*   **L7 (Transit Accessibility):** Extracted by running PostGIS `ST_DWithin` buffers over `sd_transit_stops`.
+*   **L10 (Zoning Compatibility):** Verified using point geometries over the `sandag_layer_zoning_base_sd_new` table (specifically filtering for Mixed or Commercial zones).
+*   **M3 (SNAP / Low Income):** Checked using boolean USDA queries against `nourish_cbg_food_environment`.
+
+**Policy & Temporal (P & T)**
+*   **P4 (Shared Kitchen Access):** PostGIS `ST_DWithin` queries against `nourish_comm_commissary_ext` to look for existing localized infrastructure enabling food ventures without brick-and-mortar leases.
+
+**Entrepreneur Capacity (E - What If Scenarios)**
+*   Provides support for user-defined overrides through the `ScoreOverrides` API body. If an entrepreneur reports available capital (E1) below baseline requirements, the backend dynamically restricts the output `ME` multiplier.
+
+### NAICS Adjustments
+A `NAICSMatrix` enforces strict sensitivity logic over NAICS profiles. For example, Bakery codes (`311812`) suffer elevated rent and energy sensitivities compared to standard groceries (`445110`). The math dynamically reduces the baseline Risk Factor (RF) calculation based on your inputted NAICS matrix and geographic zone multipliers (e.g., Urban Coastal vs Inland).
 
 ## Setting up
 Open command prompt/terminal in the base folder (`omNOURISH/`) and run:
 `docker-compose up --build`
 - Proceed to connect to the interface via the stated url (likely `localhost:8082/`)
-
-## API Endpoints (Swagger Supported)
-- `GET /api/business-profiles`: Fetches the available configured NAICS business frameworks and their unique baseline scoring weights.
-- `GET /api/recommend-business`: Accepts coordinates (`lat`/`lng`) and cross-evaluates all known business types, returning a sorted JSON recommending the best type of business to establish in that specific location based on market gaps and real estate metrics.
-- `GET /api/opportunity-map`: Returns map data points scored by criteria (SNAP population, foot traffic, GM ratings, competitor density) representing the optimal locations to host the specified NAICS business type.
-- `GET /api/evaluate-location`: Parses lat/lng coordinates to dynamically assign an opportunity score metric.
-- `GET /api/explore-db`: Queries Postgres schemas for direct LLM integration.
-
